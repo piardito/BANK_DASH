@@ -229,10 +229,9 @@ if uploaded_file is not None:
                     .value_counts()
                     .sort("count", descending=True)
                     .with_columns([
-                        pl.col("count").alias("nb_clients"),
                         (pl.col("count") / total * 100).alias("pct")
                     ])
-                ).to_pandas()
+                )
 
                 seg_aff_dom_global = df_rank_global["segment_affinitaire"][0]
                 pct_aff_global = df_rank_global["pct"][0]
@@ -242,9 +241,6 @@ if uploaded_file is not None:
                     value=str(seg_aff_dom_global),
                     delta=f"{pct_aff_global:.1f}% du portefeuille"
                 )
-
-                st.write("### 📊 Classement complet des segments affinitaires")
-                st.dataframe(df_rank_global, use_container_width=True)
 
         # GRAPHIQUES SEGMENTATIONS
         st.subheader("📈 Graphiques des Segmentations")
