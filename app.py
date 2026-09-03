@@ -57,8 +57,8 @@ def _read_csv_optimized(source):
         source,
         separator=";",
         ignore_errors=True,
-        low_memory=True,
-        rechunk=False,
+        low_memory=False,
+        rechunk=True,
         columns=cols_to_use,
         schema_overrides=schema_overrides,
     )
@@ -93,6 +93,7 @@ if uploaded_file is not None:
             df = load_zip(uploaded_file)
         else:
             df = load_csv_stream(uploaded_file)
+        df = df.rechunk()  # consolide les fragments issus du parsing low_memory
         gc.collect()
 
         # Nettoyage texte (désactivable pour économiser la mémoire sur gros fichiers)
@@ -153,6 +154,32 @@ if uploaded_file is not None:
 
         total = len(df_filtered)
 
+        # --- Agrégations calculées UNE SEULE FOIS, réutilisées partout ---
+        # (avant: certaines colonnes étaient recomptées 2 à 3 fois séparément
+        # pour les KPIs et les graphiques, ce qui ralentissait chaque filtre)
+
+        seg_mkt_counts = None
+        if "segmentation_marketing" in df_filtered.columns and total > 0:
+            seg_mkt_counts = df_filtered["segmentation_marketing"].value_counts().sort("count", descending=True)
+
+        seg_comp_counts = None
+        if "segmentation_comportementale" in df_filtered.columns and total > 0:
+            seg_comp_counts = df_filtered["segmentation_comportementale"].value_counts().sort("count", descending=True)
+
+        seg_aff_counts = None
+        if "segment_affinitaire" in df_filtered.columns and total > 0:
+            df_aff_clean = df_filtered.filter(
+                pl.col("segment_affinitaire").is_not_null() &
+                (pl.col("segment_affinitaire").cast(pl.Utf8).str.strip_chars() != "") &
+                (pl.col("segment_affinitaire").cast(pl.Utf8).str.to_lowercase() != "none")
+            )
+            if len(df_aff_clean) > 0:
+                seg_aff_counts = df_aff_clean["segment_affinitaire"].value_counts().sort("count", descending=True)
+
+        seg_prin_counts = None
+        if "segmentation_principalisation" in df_filtered.columns and total > 0:
+            seg_prin_counts = df_filtered["segmentation_principalisation"].value_counts()
+
         # KPIs
         st.subheader("📊 KPIs Principaux")
 
@@ -163,10 +190,8 @@ if uploaded_file is not None:
         k1.metric("Clients uniques", f"{nb_clients:,}".replace(",", " "))
 
         # 2. Segment marketing dominant
-        if "segmentation_marketing" in df_filtered.columns and total > 0:
-            seg_mkt = df_filtered["segmentation_marketing"].value_counts().sort("count", descending=True)
-            seg_dom_mkt = seg_mkt["segmentation_marketing"][0]
-            k2.metric("Segment Marketing Dominant", str(seg_dom_mkt))
+        if seg_mkt_counts is not None:
+            k2.metric("Segment Marketing Dominant", str(seg_mkt_counts["segmentation_marketing"][0]))
         else:
             k2.metric("Segment Marketing Dominant", "N/A")
 
@@ -181,10 +206,9 @@ if uploaded_file is not None:
             k3.metric("% Digital Autonomes", "N/A")
 
         # 4. Segment comportemental dominant + %
-        if "segmentation_comportementale" in df_filtered.columns and total > 0:
-            df_comp = df_filtered["segmentation_comportementale"].value_counts().sort("count", descending=True)
-            seg_comp_dom = df_comp["segmentation_comportementale"][0]
-            pct_comp_dom = (df_comp["count"][0] / total) * 100
+        if seg_comp_counts is not None:
+            seg_comp_dom = seg_comp_counts["segmentation_comportementale"][0]
+            pct_comp_dom = (seg_comp_counts["count"][0] / total) * 100
             k4.metric("Segment Comportemental Dominant", f"{seg_comp_dom}", f"{pct_comp_dom:.1f}%")
         else:
             k4.metric("Segment Comportemental Dominant", "N/A")
@@ -216,31 +240,15 @@ if uploaded_file is not None:
         # SEGMENT AFFINITAIRE GLOBAL + RANG
         st.subheader("🏆 Segment Affinitaire Dominant + Classement Global")
 
-        if "segment_affinitaire" in df_filtered.columns and total > 0:
-            df_aff_global = df_filtered.filter(
-                pl.col("segment_affinitaire").is_not_null() &
-                (pl.col("segment_affinitaire").cast(pl.Utf8).str.strip_chars() != "") &
-                (pl.col("segment_affinitaire").cast(pl.Utf8).str.to_lowercase() != "none")
+        if seg_aff_counts is not None:
+            seg_aff_dom_global = seg_aff_counts["segment_affinitaire"][0]
+            pct_aff_global = (seg_aff_counts["count"][0] / total) * 100
+
+            st.metric(
+                label="Segment Affinitaire Dominant",
+                value=str(seg_aff_dom_global),
+                delta=f"{pct_aff_global:.1f}% du portefeuille"
             )
-
-            if len(df_aff_global) > 0:
-                df_rank_global = (
-                    df_aff_global["segment_affinitaire"]
-                    .value_counts()
-                    .sort("count", descending=True)
-                    .with_columns([
-                        (pl.col("count") / total * 100).alias("pct")
-                    ])
-                )
-
-                seg_aff_dom_global = df_rank_global["segment_affinitaire"][0]
-                pct_aff_global = df_rank_global["pct"][0]
-
-                st.metric(
-                    label="Segment Affinitaire Dominant",
-                    value=str(seg_aff_dom_global),
-                    delta=f"{pct_aff_global:.1f}% du portefeuille"
-                )
 
         # GRAPHIQUES SEGMENTATIONS
         st.subheader("📈 Graphiques des Segmentations")
@@ -251,8 +259,8 @@ if uploaded_file is not None:
 
         # 1. Principalisation (Donut)
         with g1:
-            if "segmentation_principalisation" in df_filtered.columns and total > 0:
-                df_prin = df_filtered["segmentation_principalisation"].value_counts().to_pandas()
+            if seg_prin_counts is not None:
+                df_prin = seg_prin_counts.to_pandas()
                 fig_prin = px.pie(
                     df_prin,
                     values="count",
@@ -265,8 +273,8 @@ if uploaded_file is not None:
 
         # 2. Marketing (Donut)
         with g2:
-            if "segmentation_marketing" in df_filtered.columns and total > 0:
-                df_mkt = df_filtered["segmentation_marketing"].value_counts().to_pandas()
+            if seg_mkt_counts is not None:
+                df_mkt = seg_mkt_counts.to_pandas()
                 fig_mkt = px.pie(
                     df_mkt,
                     values="count",
@@ -279,13 +287,8 @@ if uploaded_file is not None:
 
         # 3. Affinitaire (Barres)
         with g3:
-            if "segment_affinitaire" in df_filtered.columns and total > 0:
-                df_aff_bar = df_filtered.filter(
-                    pl.col("segment_affinitaire").is_not_null() &
-                    (pl.col("segment_affinitaire").cast(pl.Utf8).str.strip_chars() != "") &
-                    (pl.col("segment_affinitaire").cast(pl.Utf8).str.to_lowercase() != "none")
-                )["segment_affinitaire"].value_counts().sort("count", descending=True).to_pandas()
-
+            if seg_aff_counts is not None:
+                df_aff_bar = seg_aff_counts.to_pandas()
                 fig_aff_bar = px.bar(
                     df_aff_bar,
                     x="segment_affinitaire",
@@ -299,13 +302,8 @@ if uploaded_file is not None:
 
         # 4. Affinitaire (Donut)
         with g4:
-            if "segment_affinitaire" in df_filtered.columns and total > 0:
-                df_aff_donut = df_filtered.filter(
-                    pl.col("segment_affinitaire").is_not_null() &
-                    (pl.col("segment_affinitaire").cast(pl.Utf8).str.strip_chars() != "") &
-                    (pl.col("segment_affinitaire").cast(pl.Utf8).str.to_lowercase() != "none")
-                )["segment_affinitaire"].value_counts().to_pandas()
-
+            if seg_aff_counts is not None:
+                df_aff_donut = seg_aff_counts.to_pandas()
                 fig_aff_donut = px.pie(
                     df_aff_donut,
                     values="count",
@@ -318,8 +316,8 @@ if uploaded_file is not None:
 
         # 5. Comportementale (Barres)
         with g5:
-            if "segmentation_comportementale" in df_filtered.columns and total > 0:
-                df_comp_bar = df_filtered["segmentation_comportementale"].value_counts().sort("count", descending=True).to_pandas()
+            if seg_comp_counts is not None:
+                df_comp_bar = seg_comp_counts.to_pandas()
                 fig_comp = px.bar(
                     df_comp_bar,
                     x="segmentation_comportementale",
@@ -333,7 +331,7 @@ if uploaded_file is not None:
 
         # 6. Heatmap Principalisation × Marketing
         with g6:
-            if "segmentation_principalisation" in df_filtered.columns and "segmentation_marketing" in df_filtered.columns:
+            if "segmentation_principalisation" in df_filtered.columns and "segmentation_marketing" in df_filtered.columns and total > 0:
                 df_cross = (
                     df_filtered
                     .group_by(["segmentation_principalisation", "segmentation_marketing"])
