@@ -23,7 +23,7 @@ def load_csv_stream(file_bytes):
         low_memory=True
     )
 
-@st.cache_resource
+@st.cache_resource(hash_funcs={"streamlit.runtime.uploaded_file_manager.UploadedFile": lambda f: f"{f.name}_{f.size}"})
 def load_zip(file):
     with zipfile.ZipFile(file) as z:
         csv_name = next((n for n in z.namelist() if n.lower().endswith(".csv")), None)
@@ -62,15 +62,20 @@ if uploaded_file is not None:
         def add_filter(col_name, label):
             nonlocal_df = df_filtered
             if col_name in df.columns:
-                values = df[col_name].unique().to_list()
+                # Cascade : les valeurs proposées viennent du DataFrame déjà
+                # filtré par les sélections précédentes, pas du DataFrame complet
+                values = nonlocal_df[col_name].unique().to_list()
                 values = [v for v in values if v is not None]
                 values = sorted([str(v) for v in values])
                 values = ["Tous"] + values
-                # key unique lié au fichier uploadé pour réinitialiser
-                # le filtre quand un nouveau fichier est chargé
                 widget_key = f"filter_{col_name}_{uploaded_file.name}_{uploaded_file.size}"
+                # Si la sélection précédente n'existe plus dans la liste
+                # cascadée (ex: agence absente de la région choisie),
+                # on la réinitialise pour éviter une erreur Streamlit
+                if widget_key in st.session_state and st.session_state[widget_key] not in values:
+                    st.session_state[widget_key] = "Tous"
                 selected = st.sidebar.selectbox(label, values, key=widget_key)
-                if selected != "Tous":
+                if selected != "Tous" and selected in values:
                     return nonlocal_df.filter(pl.col(col_name).cast(pl.Utf8) == selected)
             return nonlocal_df
 
