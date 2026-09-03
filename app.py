@@ -21,7 +21,7 @@ uploaded_file = st.sidebar.file_uploader(
 
 @st.cache_data
 def load_data(file):
-    # CORRECTION : Utilisation explicite du séparateur ";" pour les CSV français
+    # Lecture ultra-rapide avec Polars (Séparateur ;)
     df = pl.read_csv(file.getvalue(), separator=";")
     
     # Nettoyage automatique des colonnes textuelles (retire les espaces superflus)
@@ -101,10 +101,18 @@ if uploaded_file is not None:
         else:
             kpi3.metric("% Digital Autonomes", "N/A")
 
-        # 4. Affinité Dominante
+        # 4. Affinité Dominante (Correction stricte anti-None et anti-vide)
         if "segment_affinitaire" in df_filtered.columns and total_clients_filtre > 0:
-            aff_dom = df_filtered["segment_affinitaire"].value_counts().sort("count", descending=True)["segment_affinitaire"][0]
-            kpi4.metric("Affinité Dominante", str(aff_dom))
+            df_aff_clean = df_filtered.filter(
+                pl.col("segment_affinitaire").is_not_null() & 
+                (pl.col("segment_affinitaire").cast(pl.Utf8).str.strip_chars() != "") &
+                (pl.col("segment_affinitaire").cast(pl.Utf8).str.to_lowercase() != "none")
+            )
+            if len(df_aff_clean) > 0:
+                aff_dom = df_aff_clean["segment_affinitaire"].value_counts().sort("count", descending=True)["segment_affinitaire"][0]
+                kpi4.metric("Affinité Dominante", str(aff_dom))
+            else:
+                kpi4.metric("Affinité Dominante", "Aucune")
         else:
             kpi4.metric("Affinité Dominante", "N/A")
 
@@ -114,8 +122,7 @@ if uploaded_file is not None:
             kpi5.metric("Nombre de Conseillers", f"{nb_conseillers}")
         else:
             kpi5.metric("Nombre de Conseillers", "N/A")
-
-               # --- BLOC 2 : GRAPHIQUES DE RÉPARTITION ---
+                # --- BLOC 2 : GRAPHIQUES DE RÉPARTITION ---
         st.markdown("---")
         st.subheader("📈 Analyses Des Segmentations & Âges")
         
@@ -152,7 +159,7 @@ if uploaded_file is not None:
         # Graphique 4 : Structure des âges par tranches (Avec conversion forcée sécurisée)
         with g4:
             if "age" in df_filtered.columns and total_clients_filtre > 0:
-                # Sécurité : On force la conversion de l'âge en nombre au cas où il contient du texte ou des espaces
+                # Sécurité : On force la conversion de l'âge en nombre
                 df_age_clean = df_filtered.with_columns(
                     pl.col("age").cast(pl.Utf8).str.strip_chars().cast(pl.Int64, strict=False)
                 ).filter(pl.col("age").is_not_null())
@@ -175,7 +182,7 @@ if uploaded_file is not None:
                     st.info("La colonne 'age' ne contient pas de données numériques valides.")
 
 
-        # --- BLOC 3 : CARTES KPI POUR LES TOPS CLIENTS (Nettoyage 0 ou 1) ---
+        # --- BLOC 3 : CARTES KPI POUR LES TOPS CLIENTS (Nettoyage binaire 0 ou 1) ---
         st.markdown("---")
         st.subheader("🎯 Focus Profils Cibles (Tops Indicateurs)")
         
@@ -192,7 +199,7 @@ if uploaded_file is not None:
         for idx, (col_name, label) in enumerate(top_columns):
             with cols_top[idx]:
                 if col_name in df_filtered.columns and total_clients_filtre > 0:
-                    # Sécurité : On nettoie le texte et on force en nombre pour intercepter les ' 1 ' ou ' 0 '
+                    # Sécurité : On nettoie les espaces invisibles et force en nombre entier
                     df_top_active = df_filtered.with_columns(
                         pl.col(col_name).cast(pl.Utf8).str.strip_chars().cast(pl.Int64, strict=False)
                     ).filter(pl.col(col_name) == 1)
@@ -214,7 +221,7 @@ if uploaded_file is not None:
         st.markdown("---")
         st.subheader("📥 Extraction des données filtrées")
         
-        # Génération du CSV lourd au format point-virgule (conserve les filtres actuels)
+        # Génération du CSV en cache au format point-virgule
         csv_data = convert_df_to_csv(df_filtered)
 
         st.download_button(
@@ -229,7 +236,7 @@ if uploaded_file is not None:
         # --- BLOC 5 : APERÇU SÉCURISÉ DES DONNÉES ---
         st.markdown("---")
         st.subheader(f"📋 Aperçu visuel (Limité aux 100 premiers clients sur {total_clients_filtre:,})")
-        # On affiche proprement les colonnes bien séparées
+        # On affiche proprement les colonnes bien séparées en limitant à 100 lignes
         st.dataframe(df_filtered.head(100).to_pandas(), use_container_width=True)
 
     except Exception as e:
