@@ -43,6 +43,13 @@ if uploaded_file is not None:
     try:
         # Chargement
         if uploaded_file.name.lower().endswith(".zip"):
+            # --- DIAGNOSTIC TEMPORAIRE : à retirer une fois le problème identifié ---
+            with st.expander("🔍 Diagnostic du ZIP (temporaire)", expanded=True):
+                with zipfile.ZipFile(uploaded_file) as z_debug:
+                    for info in z_debug.infolist():
+                        st.write(f"{info.filename} — {info.file_size / 1_000_000:.1f} Mo décompressé")
+            uploaded_file.seek(0)  # remettre le curseur au début après lecture
+            # --- FIN DIAGNOSTIC ---
             df = load_zip(uploaded_file)
         else:
             df = load_csv_stream(uploaded_file)
