@@ -117,6 +117,30 @@ if uploaded_file is not None:
         else:
             k4.metric("Segment Comportemental Dominant", "N/A")
 
+        # CARTES TOP_
+        top_columns = [
+            ("TOP_TERRITORIAL_ENGAGE", "Territorial Engagé"),
+            ("TOP_OPTIMISATEUR_MULTIBANCARISE", "Optimisateur Multibancarisé"),
+            ("TOP_JOUEUR_INVESTISSEUR", "Joueur Investisseur"),
+            ("TOP_PRUDENT_INSTALLE", "Prudent Installé"),
+            ("TOP_PROFESSIONNEL_INDEPENDANT", "Professionnel Indépendant"),
+        ]
+        top_present = [(c, l) for c, l in top_columns if c in df_filtered.columns]
+
+        if top_present and total > 0:
+            st.subheader("🏅 Indicateurs TOP")
+            top_cols_ui = st.columns(len(top_present))
+            for (col_name, label), ui_col in zip(top_present, top_cols_ui):
+                nb_top = df_filtered.filter(
+                    pl.col(col_name).cast(pl.Float64, strict=False) == 1
+                ).height
+                pct_top = (nb_top / total) * 100
+                ui_col.metric(
+                    label,
+                    f"{nb_top:,}".replace(",", " "),
+                    f"{pct_top:.1f}% du portefeuille"
+                )
+
         # SEGMENT AFFINITAIRE GLOBAL + RANG
         st.subheader("🏆 Segment Affinitaire Dominant + Classement Global")
 
