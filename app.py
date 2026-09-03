@@ -20,7 +20,8 @@ def load_csv_stream(file_bytes):
         file_bytes,
         separator=";",
         ignore_errors=True,
-        low_memory=True
+        low_memory=True,
+        rechunk=False
     )
 
 @st.cache_resource(hash_funcs={"streamlit.runtime.uploaded_file_manager.UploadedFile": lambda f: f"{f.name}_{f.size}"})
@@ -30,34 +31,34 @@ def load_zip(file):
         if csv_name is None:
             raise ValueError("Aucun CSV trouvé dans le ZIP.")
         with z.open(csv_name) as csv_file:
-            # Lecture complète en mémoire pour éviter que Polars ne tente
-            # de rouvrir le chemin d'origine (nom du fichier dans le ZIP)
-            # directement sur le disque, ce qui provoque un
-            # FileNotFoundError si ce nom n'existe pas physiquement
-            # (ex: "monfichier(1).csv").
-            data = io.BytesIO(csv_file.read())
-        return load_csv_stream(data)
+            # Une seule lecture en bytes (pas de BytesIO en plus : évite une
+            # copie mémoire supplémentaire). On passe des bytes bruts, pas
+            # l'objet ZipExtFile, pour éviter que Polars ne tente de rouvrir
+            # le nom du fichier directement sur le disque.
+            csv_bytes = csv_file.read()
+        return pl.read_csv(
+            csv_bytes,
+            separator=";",
+            ignore_errors=True,
+            low_memory=True,
+            rechunk=False
+        )
 
 # MAIN LOGIC
 if uploaded_file is not None:
     try:
         # Chargement
         if uploaded_file.name.lower().endswith(".zip"):
-            # --- DIAGNOSTIC TEMPORAIRE : à retirer une fois le problème identifié ---
-            with st.expander("🔍 Diagnostic du ZIP (temporaire)", expanded=True):
-                with zipfile.ZipFile(uploaded_file) as z_debug:
-                    for info in z_debug.infolist():
-                        st.write(f"{info.filename} — {info.file_size / 1_000_000:.1f} Mo décompressé")
-            uploaded_file.seek(0)  # remettre le curseur au début après lecture
-            # --- FIN DIAGNOSTIC ---
             df = load_zip(uploaded_file)
         else:
             df = load_csv_stream(uploaded_file)
 
-        # Nettoyage texte
-        df = df.with_columns([
-            pl.col(pl.Utf8).str.strip_chars()
-        ])
+        # Nettoyage texte (désactivable pour économiser la mémoire sur gros fichiers)
+        clean_text = st.sidebar.checkbox("Nettoyer les espaces en trop (texte)", value=True)
+        if clean_text:
+            df = df.with_columns([
+                pl.col(pl.Utf8).str.strip_chars()
+            ])
 
         st.success("Chargement terminé ✔️")
 
