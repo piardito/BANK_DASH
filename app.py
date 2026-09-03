@@ -30,7 +30,13 @@ def load_zip(file):
         if csv_name is None:
             raise ValueError("Aucun CSV trouvé dans le ZIP.")
         with z.open(csv_name) as csv_file:
-            return load_csv_stream(csv_file)
+            # Lecture complète en mémoire pour éviter que Polars ne tente
+            # de rouvrir le chemin d'origine (nom du fichier dans le ZIP)
+            # directement sur le disque, ce qui provoque un
+            # FileNotFoundError si ce nom n'existe pas physiquement
+            # (ex: "monfichier(1).csv").
+            data = io.BytesIO(csv_file.read())
+        return load_csv_stream(data)
 
 # MAIN LOGIC
 if uploaded_file is not None:
@@ -54,15 +60,19 @@ if uploaded_file is not None:
         df_filtered = df
 
         def add_filter(col_name, label):
+            nonlocal_df = df_filtered
             if col_name in df.columns:
                 values = df[col_name].unique().to_list()
                 values = [v for v in values if v is not None]
                 values = sorted([str(v) for v in values])
                 values = ["Tous"] + values
-                selected = st.sidebar.selectbox(label, values)
+                # key unique lié au fichier uploadé pour réinitialiser
+                # le filtre quand un nouveau fichier est chargé
+                widget_key = f"filter_{col_name}_{uploaded_file.name}_{uploaded_file.size}"
+                selected = st.sidebar.selectbox(label, values, key=widget_key)
                 if selected != "Tous":
-                    return df_filtered.filter(pl.col(col_name).cast(pl.Utf8) == selected)
-            return df_filtered
+                    return nonlocal_df.filter(pl.col(col_name).cast(pl.Utf8) == selected)
+            return nonlocal_df
 
         df_filtered = add_filter("region", "Région")
         df_filtered = add_filter("agence", "Agence")
