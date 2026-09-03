@@ -1,4 +1,3 @@
-
 import streamlit as st
 import polars as pl
 import plotly.express as px
@@ -16,20 +15,27 @@ st.markdown("Analyse à haute performance de vos segments, profils et réseaux d
 
 # Module d'Upload dans la barre latérale
 uploaded_file = st.sidebar.file_uploader(
-    "Déposez le fichier client (CSV)", 
+    "Déposez le fichier client (CSV séparateur point-virgule)", 
     type=["csv"]
 )
 
 @st.cache_data
 def load_data(file):
-    # Lecture ultra-rapide avec Polars
-    return pl.read_csv(file.getvalue())
+    # CORRECTION : Utilisation explicite du séparateur ";" pour les CSV français
+    df = pl.read_csv(file.getvalue(), separator=";")
+    
+    # Nettoyage automatique des colonnes textuelles (retire les espaces superflus)
+    for col in df.columns:
+        if df[col].dtype == pl.Utf8:
+            df = df.with_columns(pl.col(col).str.strip_chars())
+            
+    return df
 
 # Fonction optimisée pour convertir le DataFrame Polars filtré en bytes CSV pour l'export lourd
 @st.cache_data(show_spinner="Génération du fichier CSV optimisé...")
 def convert_df_to_csv(polars_df):
     buffer = io.BytesIO()
-    polars_df.write_csv(buffer)
+    polars_df.write_csv(buffer, separator=";") # On garde le format point-virgule à l'export
     return buffer.getvalue()
 
 if uploaded_file is not None:
@@ -82,7 +88,7 @@ if uploaded_file is not None:
 
         # 2. Segment Marketing Dominant
         if "segmentation_marketing" in df_filtered.columns and total_clients_filtre > 0:
-            seg_dom_mkt = df_filtered["segmentation_marketing"].value_counts().sort("count", descending=True)["segmentation_marketing"]
+            seg_dom_mkt = df_filtered["segmentation_marketing"].value_counts().sort("count", descending=True)["segmentation_marketing"][0]
             kpi2.metric("Segment Mkt Dominant", str(seg_dom_mkt))
         else:
             kpi2.metric("Segment Mkt Dominant", "N/A")
@@ -97,7 +103,7 @@ if uploaded_file is not None:
 
         # 4. Affinité Dominante
         if "segment_affinitaire" in df_filtered.columns and total_clients_filtre > 0:
-            aff_dom = df_filtered["segment_affinitaire"].value_counts().sort("count", descending=True)["segment_affinitaire"]
+            aff_dom = df_filtered["segment_affinitaire"].value_counts().sort("count", descending=True)["segment_affinitaire"][0]
             kpi4.metric("Affinité Dominante", str(aff_dom))
         else:
             kpi4.metric("Affinité Dominante", "N/A")
@@ -108,7 +114,8 @@ if uploaded_file is not None:
             kpi5.metric("Nombre de Conseillers", f"{nb_conseillers}")
         else:
             kpi5.metric("Nombre de Conseillers", "N/A")
-                # --- BLOC 2 : GRAPHIQUES DE RÉPARTITION ---
+
+               # --- BLOC 2 : GRAPHIQUES DE RÉPARTITION ---
         st.markdown("---")
         st.subheader("📈 Analyses Des Segmentations & Âges")
         
@@ -142,25 +149,33 @@ if uploaded_file is not None:
                                   color_discrete_sequence=px.colors.qualitative.Pastel)
                 st.plotly_chart(fig_prin, use_container_width=True)
 
-        # Graphique 4 : Structure des âges par tranches
+        # Graphique 4 : Structure des âges par tranches (Avec conversion forcée sécurisée)
         with g4:
             if "age" in df_filtered.columns and total_clients_filtre > 0:
-                df_age = df_filtered.with_columns(
-                    pl.when(pl.col("age") < 25).then(pl.lit("18-24 ans"))
-                    .when(pl.col("age") < 35).then(pl.lit("25-34 ans"))
-                    .when(pl.col("age") < 50).then(pl.lit("35-49 ans"))
-                    .when(pl.col("age") < 65).then(pl.lit("50-64 ans"))
-                    .otherwise(pl.lit("65 ans et +"))
-                    .alias("tranche_age")
-                )
-                df_age_dist = df_age["tranche_age"].value_counts().sort("tranche_age").to_pandas()
-                fig_age = px.bar(df_age_dist, x="tranche_age", y="count", 
-                                 title="Structure par Tranches d'Âge", text_auto=True,
-                                 color_discrete_sequence=["#2b5c8f"])
-                st.plotly_chart(fig_age, use_container_width=True)
+                # Sécurité : On force la conversion de l'âge en nombre au cas où il contient du texte ou des espaces
+                df_age_clean = df_filtered.with_columns(
+                    pl.col("age").cast(pl.Utf8).str.strip_chars().cast(pl.Int64, strict=False)
+                ).filter(pl.col("age").is_not_null())
+
+                if len(df_age_clean) > 0:
+                    df_age = df_age_clean.with_columns(
+                        pl.when(pl.col("age") < 25).then(pl.lit("18-24 ans"))
+                        .when(pl.col("age") < 35).then(pl.lit("25-34 ans"))
+                        .when(pl.col("age") < 50).then(pl.lit("35-49 ans"))
+                        .when(pl.col("age") < 65).then(pl.lit("50-64 ans"))
+                        .otherwise(pl.lit("65 ans et +"))
+                        .alias("tranche_age")
+                    )
+                    df_age_dist = df_age["tranche_age"].value_counts().sort("tranche_age").to_pandas()
+                    fig_age = px.bar(df_age_dist, x="tranche_age", y="count", 
+                                     title="Structure par Tranches d'Âge", text_auto=True,
+                                     color_discrete_sequence=["#2b5c8f"])
+                    st.plotly_chart(fig_age, use_container_width=True)
+                else:
+                    st.info("La colonne 'age' ne contient pas de données numériques valides.")
 
 
-        # --- BLOC 3 : CARTES KPI POUR LES TOPS CLIENTS (Valant 0 ou 1) ---
+        # --- BLOC 3 : CARTES KPI POUR LES TOPS CLIENTS (Nettoyage 0 ou 1) ---
         st.markdown("---")
         st.subheader("🎯 Focus Profils Cibles (Tops Indicateurs)")
         
@@ -177,10 +192,13 @@ if uploaded_file is not None:
         for idx, (col_name, label) in enumerate(top_columns):
             with cols_top[idx]:
                 if col_name in df_filtered.columns and total_clients_filtre > 0:
-                    # Extraction et filtrage sur le flag binaire égal à 1
-                    df_top_active = df_filtered.filter(pl.col(col_name).cast(pl.Int64) == 1)
+                    # Sécurité : On nettoie le texte et on force en nombre pour intercepter les ' 1 ' ou ' 0 '
+                    df_top_active = df_filtered.with_columns(
+                        pl.col(col_name).cast(pl.Utf8).str.strip_chars().cast(pl.Int64, strict=False)
+                    ).filter(pl.col(col_name) == 1)
+                    
                     nb_top = len(df_top_active)
-                    pct_top = (nb_top / total_clients_filtre) * 100
+                    pct_top = (nb_top / total_clients_filtre) * 100 if total_clients_filtre > 0 else 0
                     
                     st.metric(
                         label=label,
@@ -196,11 +214,11 @@ if uploaded_file is not None:
         st.markdown("---")
         st.subheader("📥 Extraction des données filtrées")
         
-        # Génération du CSV lourd via Polars
+        # Génération du CSV lourd au format point-virgule (conserve les filtres actuels)
         csv_data = convert_df_to_csv(df_filtered)
 
         st.download_button(
-            label=f"💾 Télécharger l'extraction complète des {total_clients_filtre:,} lignes (CSV)",
+            label=f"💾 Télécharger l'extraction complète des {total_clients_filtre:,} lignes (CSV ;)",
             data=csv_data,
             file_name="extraction_portefeuille.csv",
             mime="text/csv",
@@ -211,15 +229,12 @@ if uploaded_file is not None:
         # --- BLOC 5 : APERÇU SÉCURISÉ DES DONNÉES ---
         st.markdown("---")
         st.subheader(f"📋 Aperçu visuel (Limité aux 100 premiers clients sur {total_clients_filtre:,})")
-        # Limitation stricte à 100 lignes pour préserver la mémoire RAM de votre navigateur
+        # On affiche proprement les colonnes bien séparées
         st.dataframe(df_filtered.head(100).to_pandas(), use_container_width=True)
 
     except Exception as e:
         st.error(f"Une erreur est survenue lors de l'analyse : {e}")
-        st.info("Vérifiez la structure et les types de données de votre fichier d'entrée.")
+        st.info("Vérifiez que votre fichier utilise bien le point-virgule (;) comme séparateur.")
 
 else:
     st.info("👋 En attente de votre fichier CSV dans la barre latérale pour générer le dashboard d'analyse.")
-
-
-
