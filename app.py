@@ -2,6 +2,7 @@ import streamlit as st
 import polars as pl
 import zipfile
 import io
+import gc
 import plotly.express as px
 
 # CONFIG
@@ -14,15 +15,57 @@ uploaded_file = st.file_uploader(
     type=["zip", "csv"]
 )
 
-@st.cache_resource
-def load_csv_stream(file_bytes):
+# Colonnes réellement utilisées par ce dashboard : si le fichier réel en
+# contient d'autres, elles ne sont même pas parsées (gain mémoire direct).
+USED_COLUMNS = [
+    "client_id", "agence", "region", "grappe",
+    "segmentation_marketing", "segmentation_comportementale",
+    "segment_affinitaire", "seg_dig_auto",
+    "TOP_TERRITORIAL_ENGAGE", "TOP_OPTIMISATEUR_MULTIBANCARISE",
+    "TOP_JOUEUR_INVESTISSEUR", "TOP_PRUDENT_INSTALLE",
+    "TOP_PROFESSIONNEL_INDEPENDANT",
+    "conseiller", "segmentation_principalisation",
+]
+
+# Types réduits pour les colonnes numériques : un flag 0/1 n'a pas besoin
+# d'un Int64 (8 octets), Int8 (1 octet) suffit largement.
+DTYPE_OVERRIDES = {
+    "client_id": pl.Int32,
+    "TOP_TERRITORIAL_ENGAGE": pl.Int8,
+    "TOP_OPTIMISATEUR_MULTIBANCARISE": pl.Int8,
+    "TOP_JOUEUR_INVESTISSEUR": pl.Int8,
+    "TOP_PRUDENT_INSTALLE": pl.Int8,
+    "TOP_PROFESSIONNEL_INDEPENDANT": pl.Int8,
+}
+
+def _read_csv_optimized(source):
+    """Lit un CSV (bytes ou flux) en ne gardant que les colonnes utiles,
+    avec des dtypes réduits, pour limiter le pic mémoire."""
+    # Étape 1 : lire uniquement l'en-tête pour savoir quelles colonnes existent
+    peek = pl.read_csv(source, separator=";", n_rows=0, ignore_errors=True)
+    cols_to_use = [c for c in USED_COLUMNS if c in peek.columns] or None
+
+    if hasattr(source, "seek"):
+        source.seek(0)  # remettre le curseur après le peek
+
+    schema_overrides = {
+        k: v for k, v in DTYPE_OVERRIDES.items()
+        if cols_to_use is None or k in cols_to_use
+    }
+
     return pl.read_csv(
-        file_bytes,
+        source,
         separator=";",
         ignore_errors=True,
         low_memory=True,
-        rechunk=False
+        rechunk=False,
+        columns=cols_to_use,
+        schema_overrides=schema_overrides,
     )
+
+@st.cache_resource
+def load_csv_stream(file_bytes):
+    return _read_csv_optimized(file_bytes)
 
 @st.cache_resource(hash_funcs={"streamlit.runtime.uploaded_file_manager.UploadedFile": lambda f: f"{f.name}_{f.size}"})
 def load_zip(file):
@@ -36,13 +79,11 @@ def load_zip(file):
             # l'objet ZipExtFile, pour éviter que Polars ne tente de rouvrir
             # le nom du fichier directement sur le disque.
             csv_bytes = csv_file.read()
-        return pl.read_csv(
-            csv_bytes,
-            separator=";",
-            ignore_errors=True,
-            low_memory=True,
-            rechunk=False
-        )
+        result = _read_csv_optimized(csv_bytes)
+        del csv_bytes
+        gc.collect()
+        return result
+
 
 # MAIN LOGIC
 if uploaded_file is not None:
@@ -52,6 +93,7 @@ if uploaded_file is not None:
             df = load_zip(uploaded_file)
         else:
             df = load_csv_stream(uploaded_file)
+        gc.collect()
 
         # Nettoyage texte (désactivable pour économiser la mémoire sur gros fichiers)
         clean_text = st.sidebar.checkbox("Nettoyer les espaces en trop (texte)", value=True)
