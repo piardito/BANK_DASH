@@ -355,23 +355,22 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_cross, use_container_width=True)
 
-        # APERÇU + EXPORT
-        st.subheader("📋 Aperçu (100 premières lignes)")
-        st.dataframe(df_filtered.head(100).to_pandas(), use_container_width=True)
-
-        @st.cache_data
+        # EXPORT
         def export_csv(df_export):
             buffer = io.BytesIO()
             df_export.write_csv(buffer, separator=";")
             return buffer.getvalue()
 
-        st.download_button(
-            f"💾 Télécharger les {total:,} lignes filtrées (CSV ;)",
-            data=export_csv(df_filtered),
-            file_name="export_filtre.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+        if total > 0:
+            st.download_button(
+                f"💾 Télécharger les {total:,} lignes filtrées (CSV ;)".replace(",", " "),
+                data=export_csv(df_filtered),
+                file_name="export_filtre.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        else:
+            st.warning("Aucune ligne à exporter avec les filtres actuels.")
 
     except Exception as e:
         st.error(f"Erreur : {e}")
