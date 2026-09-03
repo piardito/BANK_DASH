@@ -4,26 +4,18 @@ import zipfile
 import io
 import plotly.express as px
 
------------------------------
-
-CONFIG
-
------------------------------
-st.setpageconfig(page_title="Dashboard Ultra-Performant", layout="wide")
+# CONFIG
+st.set_page_config(page_title="Dashboard Ultra-Performant", layout="wide")
 st.title("🏦 Dashboard Ultra-Performant Portefeuille Client")
 
------------------------------
-
-UPLOAD ZIP / CSV
-
------------------------------
-uploadedfile = st.fileuploader(
+# UPLOAD ZIP / CSV
+uploaded_file = st.file_uploader(
     "Déposez un fichier ZIP ou CSV (jusqu’à ~100 Mo, séparateur ;)",
     type=["zip", "csv"]
 )
 
 @st.cache_resource
-def loadcsvstream(file_bytes):
+def load_csv_stream(file_bytes):
     return pl.read_csv(
         file_bytes,
         separator=";",
@@ -37,21 +29,17 @@ def load_zip(file):
         csv_name = next((n for n in z.namelist() if n.lower().endswith(".csv")), None)
         if csv_name is None:
             raise ValueError("Aucun CSV trouvé dans le ZIP.")
-        with z.open(csvname) as csvfile:
-            return loadcsvstream(csv_file)
+        with z.open(csv_name) as csv_file:
+            return load_csv_stream(csv_file)
 
------------------------------
-
-MAIN LOGIC
-
------------------------------
+# MAIN LOGIC
 if uploaded_file is not None:
     try:
         # Chargement
         if uploaded_file.name.lower().endswith(".zip"):
-            df = loadzip(uploadedfile)
+            df = load_zip(uploaded_file)
         else:
-            df = loadcsvstream(uploaded_file)
+            df = load_csv_stream(uploaded_file)
 
         # Nettoyage texte
         df = df.with_columns([
@@ -60,23 +48,21 @@ if uploaded_file is not None:
 
         st.success("Chargement terminé ✔️")
 
-        # -----------------------------
         # FILTRES DYNAMIQUES
-        # -----------------------------
         st.sidebar.header("🔍 Filtres globaux")
 
         df_filtered = df
 
-        def addfilter(colname, label):
+        def add_filter(col_name, label):
             nonlocal df_filtered
             if col_name in df.columns:
-                values = df[colname].unique().tolist()
+                values = df[col_name].unique().to_list()
                 values = [v for v in values if v is not None]
                 values = sorted([str(v) for v in values])
                 values = ["Tous"] + values
                 selected = st.sidebar.selectbox(label, values)
                 if selected != "Tous":
-                    dffiltered = dffiltered.filter(pl.col(col_name).cast(pl.Utf8) == selected)
+                    df_filtered = df_filtered.filter(pl.col(col_name).cast(pl.Utf8) == selected)
 
         add_filter("region", "Région")
         add_filter("agence", "Agence")
@@ -85,60 +71,55 @@ if uploaded_file is not None:
 
         total = len(df_filtered)
 
-        # -----------------------------
         # 4 KPIs PRINCIPAUX
-        # -----------------------------
         st.subheader("📊 KPIs Principaux")
 
         k1, k2, k3, k4 = st.columns(4)
 
         # 1. Clients uniques
-        nbclients = dffiltered["clientid"].nunique() if "clientid" in dffiltered.columns else total
+        nb_clients = df_filtered["client_id"].n_unique() if "client_id" in df_filtered.columns else total
         k1.metric("Clients uniques", f"{nb_clients:,}".replace(",", " "))
 
         # 2. Segment marketing dominant
-        if "segmentationmarketing" in dffiltered.columns and total > 0:
-            segmkt = dffiltered["segmentationmarketing"].valuecounts().sort("count", descending=True)
-            segdommkt = segmkt["segmentationmarketing"][0]
-            k2.metric("Segment Marketing Dominant", str(segdommkt))
+        if "segmentation_marketing" in df_filtered.columns and total > 0:
+            seg_mkt = df_filtered["segmentation_marketing"].value_counts().sort("count", descending=True)
+            seg_dom_mkt = seg_mkt["segmentation_marketing"][0]
+            k2.metric("Segment Marketing Dominant", str(seg_dom_mkt))
         else:
             k2.metric("Segment Marketing Dominant", "N/A")
 
         # 3. % Digital autonomes
-        if "segdigauto" in df_filtered.columns:
-            dfdig = dffiltered.filter(
-                pl.col("segdigauto").cast(pl.Utf8).str.tolowercase().isin(["oui", "1", "actif", "autonome"])
+        if "seg_dig_auto" in df_filtered.columns:
+            df_dig = df_filtered.filter(
+                pl.col("seg_dig_auto").cast(pl.Utf8).str.to_lowercase().is_in(["oui", "1", "actif", "autonome"])
             )
-            pctdig = (len(dfdig) / total) * 100 if total > 0 else 0
+            pct_dig = (len(df_dig) / total) * 100 if total > 0 else 0
             k3.metric("% Digital Autonomes", f"{pct_dig:.1f}%")
         else:
             k3.metric("% Digital Autonomes", "N/A")
 
         # 4. Segment comportemental dominant + %
-        if "segmentationcomportementale" in dffiltered.columns and total > 0:
-            dfcomp = dffiltered["segmentationcomportementale"].valuecounts().sort("count", descending=True)
-            segcompdom = dfcomp["segmentationcomportementale"][0]
-            pctcompdom = (df_comp["count"][0] / total) * 100
-            k4.metric("Segment Comportemental Dominant", f"{segcompdom}", f"{pctcompdom:.1f}%")
+        if "segmentation_comportementale" in df_filtered.columns and total > 0:
+            df_comp = df_filtered["segmentation_comportementale"].value_counts().sort("count", descending=True)
+            seg_comp_dom = df_comp["segmentation_comportementale"][0]
+            pct_comp_dom = (df_comp["count"][0] / total) * 100
+            k4.metric("Segment Comportemental Dominant", f"{seg_comp_dom}", f"{pct_comp_dom:.1f}%")
         else:
             k4.metric("Segment Comportemental Dominant", "N/A")
 
-        # -----------------------------
         # SEGMENT AFFINITAIRE GLOBAL + RANG
-        # -----------------------------
-        st.markdown("---")
         st.subheader("🏆 Segment Affinitaire Dominant + Classement Global")
 
-        if "segmentaffinitaire" in dffiltered.columns and total > 0:
-            dfaffglobal = df_filtered.filter(
-                pl.col("segmentaffinitaire").isnot_null() &
-                (pl.col("segmentaffinitaire").cast(pl.Utf8).str.stripchars() != "") &
-                (pl.col("segmentaffinitaire").cast(pl.Utf8).str.tolowercase() != "none")
+        if "segment_affinitaire" in df_filtered.columns and total > 0:
+            df_aff_global = df_filtered.filter(
+                pl.col("segment_affinitaire").is_not_null() &
+                (pl.col("segment_affinitaire").cast(pl.Utf8).str.strip_chars() != "") &
+                (pl.col("segment_affinitaire").cast(pl.Utf8).str.to_lowercase() != "none")
             )
 
-            if len(dfaffglobal) > 0:
-                dfrankglobal = (
-                    dfaffglobal["segment_affinitaire"]
+            if len(df_aff_global) > 0:
+                df_rank_global = (
+                    df_aff_global["segment_affinitaire"]
                     .value_counts()
                     .sort("count", descending=True)
                     .with_columns([
@@ -147,22 +128,19 @@ if uploaded_file is not None:
                     ])
                 ).to_pandas()
 
-                segaffdomglobal = dfrankglobal["segmentaffinitaire"][0]
-                pctaffglobal = dfrankglobal["pct"][0]
+                seg_aff_dom_global = df_rank_global["segment_affinitaire"][0]
+                pct_aff_global = df_rank_global["pct"][0]
 
                 st.metric(
                     label="Segment Affinitaire Dominant",
-                    value=str(segaffdom_global),
-                    delta=f"{pctaffglobal:.1f}% du portefeuille"
+                    value=str(seg_aff_dom_global),
+                    delta=f"{pct_aff_global:.1f}% du portefeuille"
                 )
 
                 st.write("### 📊 Classement complet des segments affinitaires")
-                st.dataframe(dfrankglobal, usecontainerwidth=True)
+                st.dataframe(df_rank_global, use_container_width=True)
 
-        # -----------------------------
         # GRAPHIQUES SEGMENTATIONS
-        # -----------------------------
-        st.markdown("---")
         st.subheader("📈 Graphiques des Segmentations")
 
         g1, g2 = st.columns(2)
@@ -171,201 +149,125 @@ if uploaded_file is not None:
 
         # 1. Principalisation (Donut)
         with g1:
-            if "segmentationprincipalisation" in dffiltered.columns and total > 0:
-                dfprin = dffiltered["segmentationprincipalisation"].valuecounts().to_pandas()
+            if "segmentation_principalisation" in df_filtered.columns and total > 0:
+                df_prin = df_filtered["segmentation_principalisation"].value_counts().to_pandas()
                 fig_prin = px.pie(
                     df_prin,
                     values="count",
                     names="segmentation_principalisation",
                     title="Segmentation Principalisation",
                     hole=0.45,
-                    colordiscretesequence=px.colors.qualitative.Pastel
+                    color_discrete_sequence=px.colors.qualitative.Pastel
                 )
-                st.plotlychart(figprin, usecontainerwidth=True)
-            else:
-                st.info("Aucune donnée de principalisation.")
+                st.plotly_chart(fig_prin, use_container_width=True)
 
         # 2. Marketing (Donut)
         with g2:
-            if "segmentationmarketing" in dffiltered.columns and total > 0:
-                dfmkt = dffiltered["segmentationmarketing"].valuecounts().to_pandas()
+            if "segmentation_marketing" in df_filtered.columns and total > 0:
+                df_mkt = df_filtered["segmentation_marketing"].value_counts().to_pandas()
                 fig_mkt = px.pie(
                     df_mkt,
                     values="count",
                     names="segmentation_marketing",
                     title="Segmentation Marketing",
                     hole=0.45,
-                    colordiscretesequence=px.colors.qualitative.Safe
+                    color_discrete_sequence=px.colors.qualitative.Safe
                 )
-                st.plotlychart(figmkt, usecontainerwidth=True)
-            else:
-                st.info("Aucune segmentation marketing disponible.")
+                st.plotly_chart(fig_mkt, use_container_width=True)
 
         # 3. Affinitaire (Barres)
         with g3:
-            if "segmentaffinitaire" in dffiltered.columns and total > 0:
-                dfaffbar = df_filtered.filter(
-                    pl.col("segmentaffinitaire").isnot_null() &
-                    (pl.col("segmentaffinitaire").cast(pl.Utf8).str.stripchars() != "") &
-                    (pl.col("segmentaffinitaire").cast(pl.Utf8).str.tolowercase() != "none")
-                )["segmentaffinitaire"].valuecounts().sort("count", descending=True).to_pandas()
+            if "segment_affinitaire" in df_filtered.columns and total > 0:
+                df_aff_bar = df_filtered.filter(
+                    pl.col("segment_affinitaire").is_not_null() &
+                    (pl.col("segment_affinitaire").cast(pl.Utf8).str.strip_chars() != "") &
+                    (pl.col("segment_affinitaire").cast(pl.Utf8).str.to_lowercase() != "none")
+                )["segment_affinitaire"].value_counts().sort("count", descending=True).to_pandas()
 
-                figaffbar = px.bar(
-                    dfaffbar,
+                fig_aff_bar = px.bar(
+                    df_aff_bar,
                     x="segment_affinitaire",
                     y="count",
                     title="Segments Affinitaires (Classement)",
                     text_auto=True,
                     color="count",
-                    colorcontinuousscale="Blues"
+                    color_continuous_scale="Blues"
                 )
-                st.plotlychart(figaffbar, usecontainer_width=True)
-            else:
-                st.info("Aucune donnée affinitaire.")
+                st.plotly_chart(fig_aff_bar, use_container_width=True)
 
         # 4. Affinitaire (Donut)
         with g4:
-            if "segmentaffinitaire" in dffiltered.columns and total > 0:
-                dfaffdonut = df_filtered.filter(
-                    pl.col("segmentaffinitaire").isnot_null() &
-                    (pl.col("segmentaffinitaire").cast(pl.Utf8).str.stripchars() != "") &
-                    (pl.col("segmentaffinitaire").cast(pl.Utf8).str.tolowercase() != "none")
-                )["segmentaffinitaire"].valuecounts().to_pandas()
+            if "segment_affinitaire" in df_filtered.columns and total > 0:
+                df_aff_donut = df_filtered.filter(
+                    pl.col("segment_affinitaire").is_not_null() &
+                    (pl.col("segment_affinitaire").cast(pl.Utf8).str.strip_chars() != "") &
+                    (pl.col("segment_affinitaire").cast(pl.Utf8).str.to_lowercase() != "none")
+                )["segment_affinitaire"].value_counts().to_pandas()
 
-                figaffdonut = px.pie(
-                    dfaffdonut,
+                fig_aff_donut = px.pie(
+                    df_aff_donut,
                     values="count",
                     names="segment_affinitaire",
                     title="Répartition Affinitaire",
                     hole=0.45,
-                    colordiscretesequence=px.colors.qualitative.Set3
+                    color_discrete_sequence=px.colors.qualitative.Set3
                 )
-                st.plotlychart(figaffdonut, usecontainer_width=True)
-            else:
-                st.info("Aucune donnée affinitaire.")
+                st.plotly_chart(fig_aff_donut, use_container_width=True)
 
         # 5. Comportementale (Barres)
         with g5:
-            if "segmentationcomportementale" in dffiltered.columns and total > 0:
-                dfcompbar = dffiltered["segmentationcomportementale"].valuecounts().sort("count", descending=True).topandas()
+            if "segmentation_comportementale" in df_filtered.columns and total > 0:
+                df_comp_bar = df_filtered["segmentation_comportementale"].value_counts().sort("count", descending=True).to_pandas()
                 fig_comp = px.bar(
-                    dfcompbar,
+                    df_comp_bar,
                     x="segmentation_comportementale",
                     y="count",
                     title="Segmentation Comportementale",
                     text_auto=True,
                     color="count",
-                    colorcontinuousscale="Viridis"
+                    color_continuous_scale="Viridis"
                 )
-                st.plotlychart(figcomp, usecontainerwidth=True)
-            else:
-                st.info("Aucune segmentation comportementale.")
+                st.plotly_chart(fig_comp, use_container_width=True)
 
         # 6. Heatmap Principalisation × Marketing
         with g6:
-            if "segmentationprincipalisation" in dffiltered.columns and "segmentationmarketing" in dffiltered.columns:
+            if "segmentation_principalisation" in df_filtered.columns and "segmentation_marketing" in df_filtered.columns:
                 df_cross = (
                     df_filtered
-                    .groupby(["segmentationprincipalisation", "segmentation_marketing"])
+                    .group_by(["segmentation_principalisation", "segmentation_marketing"])
                     .count()
                     .to_pandas()
                 )
 
-                figcross = px.densityheatmap(
+                fig_cross = px.density_heatmap(
                     df_cross,
                     x="segmentation_principalisation",
                     y="segmentation_marketing",
                     z="count",
                     title="Croisement Principalisation × Marketing",
-                    colorcontinuousscale="Blues"
+                    color_continuous_scale="Blues"
                 )
-                st.plotlychart(figcross, usecontainerwidth=True)
-            else:
-                st.info("Impossible de croiser principalisation et marketing.")
+                st.plotly_chart(fig_cross, use_container_width=True)
 
-        # -----------------------------
-        # TOPS + SEGMENTS AFFINITAIRES + RANG
-        # -----------------------------
-        st.markdown("---")
-        st.subheader("🎯 TOPs + Segments Affinitaires Dominants + Classement")
-
-        top_columns = [
-            ("TOPTERRITORIALENGAGE", "🌍 Territorial Engagé"),
-            ("TOPOPTIMISATEURMULTIBANCARISE", "🔄 Optimisateur Multibancarisé"),
-            ("TOPJOUEURINVESTISSEUR", "🎲 Joueur Investisseur"),
-            ("TOPPRUDENTINSTALLE", "🛡️ Prudent Installé"),
-            ("TOPPROFESSIONNELINDEPENDANT", "💼 Professionnel / Indépendant")
-        ]
-
-        for colname, label in topcolumns:
-            st.markdown(f"### {label}")
-
-            if colname in dffiltered.columns:
-                dftop = dffiltered.with_columns(
-                    pl.col(colname).cast(pl.Utf8).str.stripchars().cast(pl.Int64, strict=False)
-                ).filter(pl.col(col_name) == 1)
-
-                nbtop = len(dftop)
-                pcttop = (nbtop / total) * 100 if total > 0 else 0
-
-                dfafftop = df_top.filter(
-                    pl.col("segmentaffinitaire").isnot_null() &
-                    (pl.col("segmentaffinitaire").cast(pl.Utf8).str.stripchars() != "") &
-                    (pl.col("segmentaffinitaire").cast(pl.Utf8).str.tolowercase() != "none")
-                )
-
-                if len(dfafftop) > 0:
-                    dfranktop = (
-                        dfafftop["segment_affinitaire"]
-                        .value_counts()
-                        .sort("count", descending=True)
-                        .with_columns([
-                            pl.col("count").alias("nb_clients"),
-                            (pl.col("count") / nb_top * 100).alias("pct")
-                        ])
-                    ).to_pandas()
-
-                    segaffdomtop = dfranktop["segmentaffinitaire"][0]
-
-                    st.metric(
-                        label=f"{label}",
-                        value=f"{nb_top:,}".replace(",", " "),
-                        delta=f"{pcttop:.1f}% | Affinité dominante : {segaffdomtop}",
-                        delta_color="normal"
-                    )
-
-                    st.write("Classement affinitaire du TOP :")
-                    st.dataframe(dfranktop, usecontainerwidth=True)
-                else:
-                    st.metric(label=label, value=f"{nb_top}", delta="Aucune affinité détectée")
-            else:
-                st.metric(label=label, value="N/A", delta="Colonne absente")
-
-        # -----------------------------
         # APERÇU + EXPORT
-        # -----------------------------
-        st.markdown("---")
         st.subheader("📋 Aperçu (100 premières lignes)")
-
-        st.dataframe(dffiltered.head(100).topandas(), usecontainerwidth=True)
+        st.dataframe(df_filtered.head(100).to_pandas(), use_container_width=True)
 
         @st.cache_data
-        def exportcsv(dfexport):
+        def export_csv(df_export):
             buffer = io.BytesIO()
-            dfexport.writecsv(buffer, separator=";")
+            df_export.write_csv(buffer, separator=";")
             return buffer.getvalue()
 
         st.download_button(
             f"💾 Télécharger les {total:,} lignes filtrées (CSV ;)",
-            data=exportcsv(dffiltered),
-            filename="exportfiltre.csv",
+            data=export_csv(df_filtered),
+            file_name="export_filtre.csv",
             mime="text/csv",
-            usecontainerwidth=True
+            use_container_width=True
         )
 
     except Exception as e:
         st.error(f"Erreur : {e}")
-        st.info("Vérifiez que le fichier est bien au format CSV ; ou ZIP contenant un CSV ;")
 else:
     st.info("⏳ En attente d’un fichier ZIP ou CSV…")
-`
