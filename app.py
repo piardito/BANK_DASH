@@ -60,6 +60,23 @@ if uploaded_file is not None:
                 pl.col(pl.Utf8).str.strip_chars()
             ])
 
+        # Colonnes à faible cardinalité (peu de valeurs distinctes répétées
+        # sur des centaines de milliers de lignes) : passage en Categorical
+        # pour diviser fortement l'empreinte mémoire. Important sur un
+        # environnement à RAM limitée (ex: Render Free, 512 Mo).
+        low_cardinality_cols = [
+            "agence", "region", "grappe", "segmentation_marketing",
+            "segmentation_comportementale", "segment_affinitaire",
+            "seg_dig_auto", "conseiller", "segmentation_principalisation",
+        ]
+        cast_exprs = [
+            pl.col(c).cast(pl.Categorical)
+            for c in low_cardinality_cols
+            if c in df.columns
+        ]
+        if cast_exprs:
+            df = df.with_columns(cast_exprs)
+
         st.success("Chargement terminé ✔️")
 
         # FILTRES DYNAMIQUES
