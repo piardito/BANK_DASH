@@ -103,9 +103,9 @@ st.markdown(f"""
         justify-content: center;
     }}
     [data-testid="stMetricLabel"] {{
-        color: {COLOR_MUTED} !important;
-        font-size: 0.75rem !important;
-        font-weight: 500 !important;
+        color: {COLOR_TEXT} !important;
+        font-size: 0.82rem !important;
+        font-weight: 600 !important;
         white-space: normal !important;
         overflow: visible !important;
         text-overflow: unset !important;
@@ -124,6 +124,28 @@ st.markdown(f"""
     }}
     [data-testid="stMetricDelta"] {{
         font-size: 0.72rem !important;
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: unset !important;
+        line-height: 1.2 !important;
+    }}
+    [data-testid="stMetricDelta"] div {{
+        white-space: normal !important;
+        overflow-wrap: break-word !important;
+    }}
+
+    /* Colonnes strictement égales : évite que le contenu (texte long,
+       delta tronqué) ne pousse certaines cartes plus larges que d'autres */
+    [data-testid="stHorizontalBlock"] {{
+        align-items: stretch !important;
+    }}
+    [data-testid="column"] {{
+        flex: 1 1 0 !important;
+        min-width: 0 !important;
+        width: 0 !important;
+    }}
+    [data-testid="stMetric"] {{
+        height: 100%;
     }}
 
     /* Graphiques : carte crème cohérente au lieu d'un blanc pur qui tranche */
@@ -401,7 +423,8 @@ if uploaded_file is not None:
         if seg_comp_counts is not None:
             seg_comp_dom = seg_comp_counts["segmentation_comportementale"][0]
             pct_comp_dom = (seg_comp_counts["count"][0] / total) * 100
-            k4.metric("Segment Comportemental Dominant", f"{seg_comp_dom}", f"{pct_comp_dom:.1f}%")
+            k4.metric("Segment Comportemental Dominant", f"{seg_comp_dom}")
+            k4.caption(f"{pct_comp_dom:.1f}% du portefeuille")
         else:
             k4.metric("Segment Comportemental Dominant", "N/A")
 
@@ -423,11 +446,8 @@ if uploaded_file is not None:
                     pl.col(col_name).cast(pl.Float64, strict=False) == 1
                 ).height
                 pct_top = (nb_top / total) * 100
-                ui_col.metric(
-                    label,
-                    f"{nb_top:,}".replace(",", " "),
-                    f"{pct_top:.1f}% du portefeuille"
-                )
+                ui_col.metric(label, f"{nb_top:,}".replace(",", " "))
+                ui_col.caption(f"{pct_top:.1f}% du portefeuille")
 
         # SEGMENT AFFINITAIRE GLOBAL + RANG
         st.subheader("🏆 Segment Affinitaire Dominant + Classement Global")
@@ -438,9 +458,9 @@ if uploaded_file is not None:
 
             st.metric(
                 label="Segment Affinitaire Dominant",
-                value=str(seg_aff_dom_global),
-                delta=f"{pct_aff_global:.1f}% du portefeuille"
+                value=str(seg_aff_dom_global)
             )
+            st.caption(f"{pct_aff_global:.1f}% du portefeuille")
 
         # GRAPHIQUES SEGMENTATIONS
         st.subheader("📈 Graphiques des Segmentations")
