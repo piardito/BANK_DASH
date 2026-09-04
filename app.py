@@ -27,8 +27,8 @@ pio.templates["banque_premium"] = go.layout.Template(
     layout=go.Layout(
         font=dict(family="Inter, sans-serif", color=COLOR_TEXT, size=13),
         title=dict(font=dict(family="Source Serif 4, serif", size=16, color=COLOR_TEXT)),
-        paper_bgcolor=COLOR_CARD_BG,
-        plot_bgcolor=COLOR_CARD_BG,
+        paper_bgcolor="#FBFAF7",
+        plot_bgcolor="#FBFAF7",
         colorway=PALETTE_SEQ,
         xaxis=dict(gridcolor=COLOR_BORDER, zerolinecolor=COLOR_BORDER),
         yaxis=dict(gridcolor=COLOR_BORDER, zerolinecolor=COLOR_BORDER),
@@ -89,27 +89,49 @@ st.markdown(f"""
         margin-top: 8px !important;
     }}
 
-    /* Cartes metric : chiffres plus discrets */
+    /* Cartes metric : chiffres discrets + alignement garanti même si le
+       libellé passe sur 2 lignes */
     [data-testid="stMetric"] {{
         background-color: {COLOR_CARD_BG};
         border: 1px solid {COLOR_BORDER};
         border-left: 3px solid {COLOR_ACCENT};
         border-radius: 4px;
-        padding: 12px 16px;
+        padding: 12px 14px;
+        min-height: 96px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
     }}
     [data-testid="stMetricLabel"] {{
         color: {COLOR_MUTED} !important;
-        font-size: 0.78rem !important;
+        font-size: 0.75rem !important;
         font-weight: 500 !important;
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: unset !important;
+        line-height: 1.25 !important;
+    }}
+    [data-testid="stMetricLabel"] p {{
+        white-space: normal !important;
+        overflow-wrap: break-word !important;
     }}
     [data-testid="stMetricValue"] {{
         color: {COLOR_TEXT} !important;
         font-family: 'Inter', sans-serif !important;
         font-weight: 600 !important;
-        font-size: 1.35rem !important;
+        font-size: 1.1rem !important;
+        line-height: 1.3 !important;
     }}
     [data-testid="stMetricDelta"] {{
-        font-size: 0.78rem !important;
+        font-size: 0.72rem !important;
+    }}
+
+    /* Graphiques : carte crème cohérente au lieu d'un blanc pur qui tranche */
+    [data-testid="stPlotlyChart"] {{
+        background-color: #FBFAF7;
+        border: 1px solid {COLOR_BORDER};
+        border-radius: 4px;
+        padding: 8px;
     }}
 
     /* Sidebar : fond clair, accent vert discret, pas de fond plein vert */
