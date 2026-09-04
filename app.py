@@ -10,23 +10,23 @@ import plotly.graph_objects as go
 # CONFIG
 st.set_page_config(page_title="Portefeuille Client — Pilotage", layout="wide", page_icon="🏦")
 
-# --- Palette "banque premium" : vert profond (confiance/patrimoine) + or (valeur) ---
-COLOR_PRIMARY = "#0B3D2E"      # vert forêt profond
-COLOR_PRIMARY_LIGHT = "#1C5F45"
-COLOR_ACCENT = "#B08D57"       # or/bronze discret
-COLOR_BG = "#F6F5F1"           # ivoire papier
+# --- Palette "banque premium" : sobre, vert en accent seulement (pas dominant) ---
+COLOR_PRIMARY = "#16332B"      # vert profond, réservé aux accents/bandeau
+COLOR_PRIMARY_LIGHT = "#25493D"
+COLOR_ACCENT = "#B08D57"       # or/bronze
+COLOR_BG = "#F7F7F5"           # gris-ivoire très clair
 COLOR_CARD_BG = "#FFFFFF"
-COLOR_TEXT = "#1A2620"
-COLOR_MUTED = "#5C6B63"
-COLOR_BORDER = "#DEDCD3"
+COLOR_TEXT = "#26302B"         # charcoal, pas vert, pour le texte courant
+COLOR_MUTED = "#6B7570"
+COLOR_BORDER = "#E4E2DA"
 
-PALETTE_SEQ = ["#0B3D2E", "#B08D57", "#4C7A63", "#8C6A3F", "#1C5F45", "#C9B27C", "#2E4A3D", "#A98D5D"]
-PALETTE_SCALE = ["#F6F5F1", "#C9B27C", "#B08D57", "#4C7A63", "#0B3D2E"]
+PALETTE_SEQ = ["#B08D57", "#2C3E42", "#6B8E7F", "#8C6A3F", "#16332B", "#C9B27C", "#4A5A54", "#A9744F"]
+PALETTE_SCALE = ["#F7F7F5", "#C9B27C", "#B08D57", "#6B8E7F", "#16332B"]
 
 pio.templates["banque_premium"] = go.layout.Template(
     layout=go.Layout(
         font=dict(family="Inter, sans-serif", color=COLOR_TEXT, size=13),
-        title=dict(font=dict(family="Source Serif 4, serif", size=17, color=COLOR_PRIMARY)),
+        title=dict(font=dict(family="Source Serif 4, serif", size=16, color=COLOR_TEXT)),
         paper_bgcolor=COLOR_CARD_BG,
         plot_bgcolor=COLOR_CARD_BG,
         colorway=PALETTE_SEQ,
@@ -50,64 +50,109 @@ st.markdown(f"""
         background-color: {COLOR_BG};
     }}
 
-    h1, h2, h3 {{
+    h1 {{
         font-family: 'Source Serif 4', serif !important;
-        color: {COLOR_PRIMARY} !important;
         font-weight: 600 !important;
     }}
+    h2, h3 {{
+        font-family: 'Inter', sans-serif !important;
+        color: {COLOR_TEXT} !important;
+        font-weight: 600 !important;
+        font-size: 1.05rem !important;
+    }}
 
-    /* Bandeau institutionnel */
+    /* Bandeau institutionnel (en-tête seulement) */
     .bank-header {{
-        background: linear-gradient(135deg, {COLOR_PRIMARY} 0%, {COLOR_PRIMARY_LIGHT} 100%);
-        padding: 28px 36px;
+        background: linear-gradient(120deg, {COLOR_PRIMARY} 0%, {COLOR_PRIMARY_LIGHT} 100%);
+        padding: 20px 32px;
         border-radius: 6px;
-        margin-bottom: 28px;
-        border-left: 5px solid {COLOR_ACCENT};
+        margin-bottom: 24px;
+        border-left: 4px solid {COLOR_ACCENT};
     }}
     .bank-header h1 {{
         color: #FFFFFF !important;
-        font-size: 1.6rem !important;
+        font-size: 1.35rem !important;
         margin: 0 !important;
         letter-spacing: 0.2px;
     }}
     .bank-header p {{
-        color: #E8E4D9;
-        margin: 6px 0 0 0;
-        font-size: 0.92rem;
+        color: #D7D3C6;
+        margin: 4px 0 0 0;
+        font-size: 0.85rem;
         font-family: 'Inter', sans-serif;
     }}
 
-    /* Cartes metric */
+    /* Titres de section : petit accent gauche, pas de bordure pleine largeur */
+    div[data-testid="stMarkdownContainer"] h3 {{
+        border-left: 3px solid {COLOR_ACCENT};
+        padding-left: 10px;
+        margin-top: 8px !important;
+    }}
+
+    /* Cartes metric : chiffres plus discrets */
     [data-testid="stMetric"] {{
         background-color: {COLOR_CARD_BG};
         border: 1px solid {COLOR_BORDER};
         border-left: 3px solid {COLOR_ACCENT};
         border-radius: 4px;
-        padding: 16px 18px;
+        padding: 12px 16px;
     }}
     [data-testid="stMetricLabel"] {{
         color: {COLOR_MUTED} !important;
-        font-size: 0.82rem !important;
+        font-size: 0.78rem !important;
         font-weight: 500 !important;
     }}
     [data-testid="stMetricValue"] {{
-        color: {COLOR_PRIMARY} !important;
-        font-family: 'Source Serif 4', serif !important;
+        color: {COLOR_TEXT} !important;
+        font-family: 'Inter', sans-serif !important;
         font-weight: 600 !important;
+        font-size: 1.35rem !important;
+    }}
+    [data-testid="stMetricDelta"] {{
+        font-size: 0.78rem !important;
     }}
 
-    /* Sidebar */
+    /* Sidebar : fond clair, accent vert discret, pas de fond plein vert */
     [data-testid="stSidebar"] {{
-        background-color: {COLOR_PRIMARY};
+        background-color: #FBFAF8;
+        border-right: 1px solid {COLOR_BORDER};
     }}
     [data-testid="stSidebar"] * {{
-        color: #F0EEE6 !important;
+        color: {COLOR_TEXT} !important;
     }}
     [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {{
-        color: #FFFFFF !important;
+        color: {COLOR_PRIMARY} !important;
         font-family: 'Inter', sans-serif !important;
         font-size: 0.95rem !important;
-        text-transform: none !important;
+        font-weight: 700 !important;
+        border-left: none !important;
+        padding-left: 0 !important;
+        border-bottom: 2px solid {COLOR_ACCENT};
+        padding-bottom: 8px;
+        margin-bottom: 14px !important;
+    }}
+
+    /* Widgets de filtre bien visibles : contour net + fond blanc distinct */
+    [data-testid="stSidebar"] label {{
+        font-weight: 600 !important;
+        font-size: 0.82rem !important;
+        color: {COLOR_PRIMARY} !important;
+        margin-bottom: 2px !important;
+    }}
+    [data-testid="stSidebar"] div[data-baseweb="select"] > div {{
+        background-color: #FFFFFF !important;
+        border: 1.5px solid {COLOR_PRIMARY} !important;
+        border-radius: 4px !important;
+        box-shadow: none !important;
+    }}
+    [data-testid="stSidebar"] div[data-baseweb="select"] > div:hover {{
+        border-color: {COLOR_ACCENT} !important;
+    }}
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] {{
+        margin-bottom: 4px !important;
+    }}
+    [data-testid="stSidebar"] .stSelectbox {{
+        margin-bottom: 16px !important;
     }}
 
     /* Boutons */
@@ -120,12 +165,6 @@ st.markdown(f"""
     }}
     .stDownloadButton button:hover, .stButton button:hover {{
         background-color: {COLOR_PRIMARY} !important;
-    }}
-
-    /* Sous-titres de section */
-    .stSubheader, div[data-testid="stMarkdownContainer"] h3 {{
-        border-bottom: 1px solid {COLOR_BORDER};
-        padding-bottom: 6px;
     }}
 
     hr {{
@@ -280,6 +319,7 @@ if uploaded_file is not None:
         df_filtered = add_filter("region", "Région")
         df_filtered = add_filter("agence", "Agence")
         df_filtered = add_filter("grappe", "Grappe")
+        df_filtered = add_filter("segmentation_marketing", "Segment Marketing")
         df_filtered = add_filter("conseiller", "Conseiller")
 
         total = len(df_filtered)
