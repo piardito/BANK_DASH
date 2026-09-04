@@ -5,18 +5,80 @@ import io
 import gc
 import plotly.express as px
 
-# CONFIG
+# ============================
+# 🎨 DESIGN PREMIUM
+# ============================
 st.set_page_config(page_title="Dashboard Ultra-Performant", layout="wide")
-st.title("🏦 Dashboard Ultra-Performant Portefeuille Client")
 
-# UPLOAD ZIP / CSV
+st.markdown("""
+<style>
+
+html, body, [class*="css"]  {
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+}
+
+h1, h2, h3, h4 {
+    font-weight: 600;
+    letter-spacing: -0.5px;
+}
+
+h1 {
+    font-size: 32px !important;
+    color: #1A1A1A;
+}
+
+h2 {
+    font-size: 24px !important;
+    margin-top: 20px;
+}
+
+h3 {
+    font-size: 20px !important;
+}
+
+.sidebar .sidebar-content {
+    background: #F7F9FC;
+}
+
+.metric-container {
+    background: #ffffff;
+    padding: 18px 22px;
+    border-radius: 12px;
+    border: 1px solid #E5E7EB;
+    box-shadow: 0px 2px 6px rgba(0,0,0,0.04);
+}
+
+hr {
+    border: none;
+    border-top: 1px solid #E5E7EB;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# ============================
+# 🏦 HEADER PREMIUM
+# ============================
+st.markdown("""
+<div style="padding: 20px 0 10px 0;">
+    <h1 style="margin-bottom: -10px;">
+        🏦 Portefeuille Client — Dashboard Ultra‑Performant
+    </h1>
+    <p style="color:#555; font-size:14px;">
+        Analyse avancée, segmentation, indicateurs TOP et visualisations dynamiques
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+# ============================
+# 📥 UPLOAD ZIP / CSV
+# ============================
 uploaded_file = st.file_uploader(
     "Déposez un fichier ZIP ou CSV (jusqu’à ~100 Mo, séparateur ;)",
     type=["zip", "csv"]
 )
 
-# Colonnes réellement utilisées par ce dashboard : si le fichier réel en
-# contient d'autres, elles ne sont même pas parsées (gain mémoire direct).
 USED_COLUMNS = [
     "client_id", "agence", "region", "grappe",
     "segmentation_marketing", "segmentation_comportementale",
@@ -27,8 +89,6 @@ USED_COLUMNS = [
     "conseiller", "segmentation_principalisation",
 ]
 
-# Types réduits pour les colonnes numériques : un flag 0/1 n'a pas besoin
-# d'un Int64 (8 octets), Int8 (1 octet) suffit largement.
 DTYPE_OVERRIDES = {
     "client_id": pl.Int32,
     "TOP_TERRITORIAL_ENGAGE": pl.Int8,
@@ -39,14 +99,11 @@ DTYPE_OVERRIDES = {
 }
 
 def _read_csv_optimized(source):
-    """Lit un CSV (bytes ou flux) en ne gardant que les colonnes utiles,
-    avec des dtypes réduits, pour limiter le pic mémoire."""
-    # Étape 1 : lire uniquement l'en-tête pour savoir quelles colonnes existent
     peek = pl.read_csv(source, separator=";", n_rows=0, ignore_errors=True)
     cols_to_use = [c for c in USED_COLUMNS if c in peek.columns] or None
 
     if hasattr(source, "seek"):
-        source.seek(0)  # remettre le curseur après le peek
+        source.seek(0)
 
     schema_overrides = {
         k: v for k, v in DTYPE_OVERRIDES.items()
@@ -74,39 +131,31 @@ def load_zip(file):
         if csv_name is None:
             raise ValueError("Aucun CSV trouvé dans le ZIP.")
         with z.open(csv_name) as csv_file:
-            # Une seule lecture en bytes (pas de BytesIO en plus : évite une
-            # copie mémoire supplémentaire). On passe des bytes bruts, pas
-            # l'objet ZipExtFile, pour éviter que Polars ne tente de rouvrir
-            # le nom du fichier directement sur le disque.
             csv_bytes = csv_file.read()
         result = _read_csv_optimized(csv_bytes)
         del csv_bytes
         gc.collect()
         return result
 
-
-# MAIN LOGIC
+# ============================
+# 🔍 MAIN LOGIC
+# ============================
 if uploaded_file is not None:
     try:
-        # Chargement
         if uploaded_file.name.lower().endswith(".zip"):
             df = load_zip(uploaded_file)
         else:
             df = load_csv_stream(uploaded_file)
-        df = df.rechunk()  # consolide les fragments issus du parsing low_memory
+
+        df = df.rechunk()
         gc.collect()
 
-        # Nettoyage texte (désactivable pour économiser la mémoire sur gros fichiers)
         clean_text = st.sidebar.checkbox("Nettoyer les espaces en trop (texte)", value=True)
         if clean_text:
             df = df.with_columns([
                 pl.col(pl.Utf8).str.strip_chars()
             ])
 
-        # Colonnes à faible cardinalité (peu de valeurs distinctes répétées
-        # sur des centaines de milliers de lignes) : passage en Categorical
-        # pour diviser fortement l'empreinte mémoire. Important sur un
-        # environnement à RAM limitée (ex: Render Free, 512 Mo).
         low_cardinality_cols = [
             "agence", "region", "grappe", "segmentation_marketing",
             "segmentation_comportementale", "segment_affinitaire",
@@ -122,7 +171,9 @@ if uploaded_file is not None:
 
         st.success("Chargement terminé ✔️")
 
-        # FILTRES DYNAMIQUES
+        # ============================
+        # 🔍 FILTRES DYNAMIQUES
+        # ============================
         st.sidebar.header("🔍 Filtres globaux")
 
         df_filtered = df
@@ -130,16 +181,11 @@ if uploaded_file is not None:
         def add_filter(col_name, label):
             nonlocal_df = df_filtered
             if col_name in df.columns:
-                # Cascade : les valeurs proposées viennent du DataFrame déjà
-                # filtré par les sélections précédentes, pas du DataFrame complet
                 values = nonlocal_df[col_name].unique().to_list()
                 values = [v for v in values if v is not None]
                 values = sorted([str(v) for v in values])
                 values = ["Tous"] + values
                 widget_key = f"filter_{col_name}_{uploaded_file.name}_{uploaded_file.size}"
-                # Si la sélection précédente n'existe plus dans la liste
-                # cascadée (ex: agence absente de la région choisie),
-                # on la réinitialise pour éviter une erreur Streamlit
                 if widget_key in st.session_state and st.session_state[widget_key] not in values:
                     st.session_state[widget_key] = "Tous"
                 selected = st.sidebar.selectbox(label, values, key=widget_key)
@@ -154,10 +200,9 @@ if uploaded_file is not None:
 
         total = len(df_filtered)
 
-        # --- Agrégations calculées UNE SEULE FOIS, réutilisées partout ---
-        # (avant: certaines colonnes étaient recomptées 2 à 3 fois séparément
-        # pour les KPIs et les graphiques, ce qui ralentissait chaque filtre)
-
+        # ============================
+        # 📊 AGRÉGATIONS
+        # ============================
         seg_mkt_counts = None
         if "segmentation_marketing" in df_filtered.columns and total > 0:
             seg_mkt_counts = df_filtered["segmentation_marketing"].value_counts().sort("count", descending=True)
@@ -180,84 +225,60 @@ if uploaded_file is not None:
         if "segmentation_principalisation" in df_filtered.columns and total > 0:
             seg_prin_counts = df_filtered["segmentation_principalisation"].value_counts()
 
-        # KPIs
-        st.subheader("📊 KPIs Principaux")
+        # ============================
+        # 📊 KPIs PREMIUM
+        # ============================
+        st.markdown("### 📌 Indicateurs Clés")
 
         k1, k2, k3, k4 = st.columns(4)
 
-        # 1. Clients uniques
         nb_clients = df_filtered["client_id"].n_unique() if "client_id" in df_filtered.columns else total
-        k1.metric("Clients uniques", f"{nb_clients:,}".replace(",", " "))
 
-        # 2. Segment marketing dominant
-        if seg_mkt_counts is not None:
-            k2.metric("Segment Marketing Dominant", str(seg_mkt_counts["segmentation_marketing"][0]))
-        else:
-            k2.metric("Segment Marketing Dominant", "N/A")
+        with k1:
+            st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+            st.metric("Clients uniques", f"{nb_clients:,}".replace(",", " "))
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        # 3. % Digital autonomes
-        if "seg_dig_auto" in df_filtered.columns:
-            df_dig = df_filtered.filter(
-                pl.col("seg_dig_auto").cast(pl.Utf8).str.to_lowercase().is_in(["oui", "1", "actif", "autonome"])
-            )
-            pct_dig = (len(df_dig) / total) * 100 if total > 0 else 0
-            k3.metric("% Digital Autonomes", f"{pct_dig:.1f}%")
-        else:
-            k3.metric("% Digital Autonomes", "N/A")
+        with k2:
+            st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+            st.metric("Segment Marketing Dominant", str(seg_mkt_counts["segmentation_marketing"][0]) if seg_mkt_counts is not None else "N/A")
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        # 4. Segment comportemental dominant + %
-        if seg_comp_counts is not None:
-            seg_comp_dom = seg_comp_counts["segmentation_comportementale"][0]
-            pct_comp_dom = (seg_comp_counts["count"][0] / total) * 100
-            k4.metric("Segment Comportemental Dominant", f"{seg_comp_dom}", f"{pct_comp_dom:.1f}%")
-        else:
-            k4.metric("Segment Comportemental Dominant", "N/A")
-
-        # CARTES TOP_
-        top_columns = [
-            ("TOP_TERRITORIAL_ENGAGE", "Territorial Engagé"),
-            ("TOP_OPTIMISATEUR_MULTIBANCARISE", "Optimisateur Multibancarisé"),
-            ("TOP_JOUEUR_INVESTISSEUR", "Joueur Investisseur"),
-            ("TOP_PRUDENT_INSTALLE", "Prudent Installé"),
-            ("TOP_PROFESSIONNEL_INDEPENDANT", "Professionnel Indépendant"),
-        ]
-        top_present = [(c, l) for c, l in top_columns if c in df_filtered.columns]
-
-        if top_present and total > 0:
-            st.subheader("🏅 Indicateurs TOP")
-            top_cols_ui = st.columns(len(top_present))
-            for (col_name, label), ui_col in zip(top_present, top_cols_ui):
-                nb_top = df_filtered.filter(
-                    pl.col(col_name).cast(pl.Float64, strict=False) == 1
-                ).height
-                pct_top = (nb_top / total) * 100
-                ui_col.metric(
-                    label,
-                    f"{nb_top:,}".replace(",", " "),
-                    f"{pct_top:.1f}% du portefeuille"
+        with k3:
+            st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+            if "seg_dig_auto" in df_filtered.columns:
+                df_dig = df_filtered.filter(
+                    pl.col("seg_dig_auto").cast(pl.Utf8).str.to_lowercase().is_in(["oui", "1", "actif", "autonome"])
                 )
+                pct_dig = (len(df_dig) / total) * 100 if total > 0 else 0
+                st.metric("% Digital Autonomes", f"{pct_dig:.1f}%")
+            else:
+                st.metric("% Digital Autonomes", "N/A")
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        # SEGMENT AFFINITAIRE GLOBAL + RANG
-        st.subheader("🏆 Segment Affinitaire Dominant + Classement Global")
+        with k4:
+            st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+            if seg_comp_counts is not None:
+                seg_comp_dom = seg_comp_counts["segmentation_comportementale"][0]
+                pct_comp_dom = (seg_comp_counts["count"][0] / total) * 100
+                st.metric("Segment Comportemental Dominant", f"{seg_comp_dom}", f"{pct_comp_dom:.1f}%")
+            else:
+                st.metric("Segment Comportemental Dominant", "N/A")
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        if seg_aff_counts is not None:
-            seg_aff_dom_global = seg_aff_counts["segment_affinitaire"][0]
-            pct_aff_global = (seg_aff_counts["count"][0] / total) * 100
+        # ============================
+        # 📈 GRAPHIQUES PREMIUM
+        # ============================
+        px.defaults.template = "plotly_white"
+        px.defaults.color_continuous_scale = px.colors.sequential.Blues
 
-            st.metric(
-                label="Segment Affinitaire Dominant",
-                value=str(seg_aff_dom_global),
-                delta=f"{pct_aff_global:.1f}% du portefeuille"
-            )
-
-        # GRAPHIQUES SEGMENTATIONS
-        st.subheader("📈 Graphiques des Segmentations")
+        st.markdown("### 📈 Visualisations des Segmentations")
 
         g1, g2 = st.columns(2)
         g3, g4 = st.columns(2)
         g5, g6 = st.columns(2)
 
-        # 1. Principalisation (Donut)
+        # Principalisation
         with g1:
             if seg_prin_counts is not None:
                 df_prin = seg_prin_counts.to_pandas()
@@ -271,7 +292,7 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_prin, use_container_width=True)
 
-        # 2. Marketing (Donut)
+        # Marketing
         with g2:
             if seg_mkt_counts is not None:
                 df_mkt = seg_mkt_counts.to_pandas()
@@ -285,7 +306,7 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_mkt, use_container_width=True)
 
-        # 3. Affinitaire (Barres)
+        # Affinitaire bar
         with g3:
             if seg_aff_counts is not None:
                 df_aff_bar = seg_aff_counts.to_pandas()
@@ -300,7 +321,7 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_aff_bar, use_container_width=True)
 
-        # 4. Affinitaire (Donut)
+        # Affinitaire donut
         with g4:
             if seg_aff_counts is not None:
                 df_aff_donut = seg_aff_counts.to_pandas()
@@ -314,7 +335,7 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_aff_donut, use_container_width=True)
 
-        # 5. Comportementale (Barres)
+        # Comportementale bar
         with g5:
             if seg_comp_counts is not None:
                 df_comp_bar = seg_comp_counts.to_pandas()
@@ -329,7 +350,7 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_comp, use_container_width=True)
 
-        # 6. Heatmap Principalisation × Marketing
+        # Heatmap
         with g6:
             if "segmentation_principalisation" in df_filtered.columns and "segmentation_marketing" in df_filtered.columns and total > 0:
                 df_cross = (
@@ -349,7 +370,9 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_cross, use_container_width=True)
 
-        # EXPORT
+        # ============================
+        # 💾 EXPORT CSV
+        # ============================
         def export_csv(df_export):
             buffer = io.BytesIO()
             df_export.write_csv(buffer, separator=";")
@@ -371,3 +394,13 @@ if uploaded_file is not None:
 
 else:
     st.info("⏳ En attente d’un fichier ZIP ou CSV…")
+
+# ============================
+# 🧩 FOOTER PREMIUM
+# ============================
+st.markdown("""
+<hr style="margin-top:40px;">
+<p style="text-align:center; color:#888; font-size:13px;">
+Dashboard optimisé Polars ⚡ — Design Premium ✨ — Powered by Streamlit
+</p>
+""", unsafe_allow_html=True)
