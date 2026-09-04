@@ -4,10 +4,140 @@ import zipfile
 import io
 import gc
 import plotly.express as px
+import plotly.io as pio
+import plotly.graph_objects as go
 
 # CONFIG
-st.set_page_config(page_title="Dashboard Ultra-Performant", layout="wide")
-st.title("🏦 Dashboard Ultra-Performant Portefeuille Client")
+st.set_page_config(page_title="Portefeuille Client — Pilotage", layout="wide", page_icon="🏦")
+
+# --- Palette "banque premium" : vert profond (confiance/patrimoine) + or (valeur) ---
+COLOR_PRIMARY = "#0B3D2E"      # vert forêt profond
+COLOR_PRIMARY_LIGHT = "#1C5F45"
+COLOR_ACCENT = "#B08D57"       # or/bronze discret
+COLOR_BG = "#F6F5F1"           # ivoire papier
+COLOR_CARD_BG = "#FFFFFF"
+COLOR_TEXT = "#1A2620"
+COLOR_MUTED = "#5C6B63"
+COLOR_BORDER = "#DEDCD3"
+
+PALETTE_SEQ = ["#0B3D2E", "#B08D57", "#4C7A63", "#8C6A3F", "#1C5F45", "#C9B27C", "#2E4A3D", "#A98D5D"]
+PALETTE_SCALE = ["#F6F5F1", "#C9B27C", "#B08D57", "#4C7A63", "#0B3D2E"]
+
+pio.templates["banque_premium"] = go.layout.Template(
+    layout=go.Layout(
+        font=dict(family="Inter, sans-serif", color=COLOR_TEXT, size=13),
+        title=dict(font=dict(family="Source Serif 4, serif", size=17, color=COLOR_PRIMARY)),
+        paper_bgcolor=COLOR_CARD_BG,
+        plot_bgcolor=COLOR_CARD_BG,
+        colorway=PALETTE_SEQ,
+        xaxis=dict(gridcolor=COLOR_BORDER, zerolinecolor=COLOR_BORDER),
+        yaxis=dict(gridcolor=COLOR_BORDER, zerolinecolor=COLOR_BORDER),
+        legend=dict(font=dict(size=12)),
+    )
+)
+pio.templates.default = "banque_premium"
+
+st.markdown(f"""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+    html, body, [class*="css"] {{
+        font-family: 'Inter', sans-serif;
+        color: {COLOR_TEXT};
+    }}
+
+    .stApp {{
+        background-color: {COLOR_BG};
+    }}
+
+    h1, h2, h3 {{
+        font-family: 'Source Serif 4', serif !important;
+        color: {COLOR_PRIMARY} !important;
+        font-weight: 600 !important;
+    }}
+
+    /* Bandeau institutionnel */
+    .bank-header {{
+        background: linear-gradient(135deg, {COLOR_PRIMARY} 0%, {COLOR_PRIMARY_LIGHT} 100%);
+        padding: 28px 36px;
+        border-radius: 6px;
+        margin-bottom: 28px;
+        border-left: 5px solid {COLOR_ACCENT};
+    }}
+    .bank-header h1 {{
+        color: #FFFFFF !important;
+        font-size: 1.6rem !important;
+        margin: 0 !important;
+        letter-spacing: 0.2px;
+    }}
+    .bank-header p {{
+        color: #E8E4D9;
+        margin: 6px 0 0 0;
+        font-size: 0.92rem;
+        font-family: 'Inter', sans-serif;
+    }}
+
+    /* Cartes metric */
+    [data-testid="stMetric"] {{
+        background-color: {COLOR_CARD_BG};
+        border: 1px solid {COLOR_BORDER};
+        border-left: 3px solid {COLOR_ACCENT};
+        border-radius: 4px;
+        padding: 16px 18px;
+    }}
+    [data-testid="stMetricLabel"] {{
+        color: {COLOR_MUTED} !important;
+        font-size: 0.82rem !important;
+        font-weight: 500 !important;
+    }}
+    [data-testid="stMetricValue"] {{
+        color: {COLOR_PRIMARY} !important;
+        font-family: 'Source Serif 4', serif !important;
+        font-weight: 600 !important;
+    }}
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {{
+        background-color: {COLOR_PRIMARY};
+    }}
+    [data-testid="stSidebar"] * {{
+        color: #F0EEE6 !important;
+    }}
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {{
+        color: #FFFFFF !important;
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.95rem !important;
+        text-transform: none !important;
+    }}
+
+    /* Boutons */
+    .stDownloadButton button, .stButton button {{
+        background-color: {COLOR_ACCENT} !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        border-radius: 4px !important;
+        font-weight: 600 !important;
+    }}
+    .stDownloadButton button:hover, .stButton button:hover {{
+        background-color: {COLOR_PRIMARY} !important;
+    }}
+
+    /* Sous-titres de section */
+    .stSubheader, div[data-testid="stMarkdownContainer"] h3 {{
+        border-bottom: 1px solid {COLOR_BORDER};
+        padding-bottom: 6px;
+    }}
+
+    hr {{
+        border-color: {COLOR_BORDER} !important;
+    }}
+</style>
+
+<div class="bank-header">
+    <h1>Pilotage du Portefeuille Client</h1>
+    <p>Vue consolidée des segmentations, indicateurs comportementaux et affinitaires</p>
+</div>
+""", unsafe_allow_html=True)
 
 # UPLOAD ZIP / CSV
 uploaded_file = st.file_uploader(
@@ -267,7 +397,7 @@ if uploaded_file is not None:
                     names="segmentation_principalisation",
                     title="Segmentation Principalisation",
                     hole=0.45,
-                    color_discrete_sequence=px.colors.qualitative.Pastel
+                    color_discrete_sequence=PALETTE_SEQ
                 )
                 st.plotly_chart(fig_prin, use_container_width=True)
 
@@ -281,7 +411,7 @@ if uploaded_file is not None:
                     names="segmentation_marketing",
                     title="Segmentation Marketing",
                     hole=0.45,
-                    color_discrete_sequence=px.colors.qualitative.Safe
+                    color_discrete_sequence=PALETTE_SEQ
                 )
                 st.plotly_chart(fig_mkt, use_container_width=True)
 
@@ -296,7 +426,7 @@ if uploaded_file is not None:
                     title="Segments Affinitaires (Classement)",
                     text_auto=True,
                     color="count",
-                    color_continuous_scale="Blues"
+                    color_continuous_scale=PALETTE_SCALE
                 )
                 st.plotly_chart(fig_aff_bar, use_container_width=True)
 
@@ -310,7 +440,7 @@ if uploaded_file is not None:
                     names="segment_affinitaire",
                     title="Répartition Affinitaire",
                     hole=0.45,
-                    color_discrete_sequence=px.colors.qualitative.Set3
+                    color_discrete_sequence=PALETTE_SEQ
                 )
                 st.plotly_chart(fig_aff_donut, use_container_width=True)
 
@@ -325,7 +455,7 @@ if uploaded_file is not None:
                     title="Segmentation Comportementale",
                     text_auto=True,
                     color="count",
-                    color_continuous_scale="Viridis"
+                    color_continuous_scale=PALETTE_SCALE
                 )
                 st.plotly_chart(fig_comp, use_container_width=True)
 
@@ -345,7 +475,7 @@ if uploaded_file is not None:
                     y="segmentation_marketing",
                     z="count",
                     title="Croisement Principalisation × Marketing",
-                    color_continuous_scale="Blues"
+                    color_continuous_scale=PALETTE_SCALE
                 )
                 st.plotly_chart(fig_cross, use_container_width=True)
 
