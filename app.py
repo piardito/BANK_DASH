@@ -462,6 +462,26 @@ if uploaded_file is not None:
             )
             st.caption(f"{pct_aff_global:.1f}% du portefeuille")
 
+            df_rank_global = (
+                seg_aff_counts
+                .with_columns([
+                    (pl.col("count") / total * 100).round(1).alias("% du portefeuille")
+                ])
+                .rename({"segment_affinitaire": "Segment affinitaire", "count": "Nb clients"})
+                .to_pandas()
+            )
+            st.dataframe(
+                df_rank_global,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "% du portefeuille": st.column_config.ProgressColumn(
+                        "% du portefeuille", format="%.1f%%", min_value=0, max_value=100
+                    ),
+                    "Nb clients": st.column_config.NumberColumn("Nb clients", format="%d"),
+                },
+            )
+
         # GRAPHIQUES SEGMENTATIONS
         st.subheader("📈 Graphiques des Segmentations")
 
