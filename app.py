@@ -64,7 +64,7 @@ def _read_csv_optimized(source):
         columns=cols_to_use,
         schema_overrides=schema_overrides,
     )
-@@ -93,6 +93,7 @@
+
             df = load_zip(uploaded_file)
         else:
             df = load_csv_stream(uploaded_file)
@@ -72,7 +72,7 @@ def _read_csv_optimized(source):
         gc.collect()
 
         # Nettoyage texte (désactivable pour économiser la mémoire sur gros fichiers)
-@@ -153,6 +154,32 @@
+
 
         total = len(df_filtered)
 
@@ -105,7 +105,7 @@ def _read_csv_optimized(source):
         # KPIs
         st.subheader("📊 KPIs Principaux")
 
-@@ -163,10 +190,8 @@
+
         k1.metric("Clients uniques", f"{nb_clients:,}".replace(",", " "))
 
         # 2. Segment marketing dominant
@@ -117,8 +117,6 @@ def _read_csv_optimized(source):
             k2.metric("Segment Marketing Dominant", str(seg_mkt_counts["segmentation_marketing"][0]))
         else:
             k2.metric("Segment Marketing Dominant", "N/A")
-
-@@ -181,10 +206,9 @@
             k3.metric("% Digital Autonomes", "N/A")
 
         # 4. Segment comportemental dominant + %
@@ -132,7 +130,7 @@ def _read_csv_optimized(source):
             k4.metric("Segment Comportemental Dominant", f"{seg_comp_dom}", f"{pct_comp_dom:.1f}%")
         else:
             k4.metric("Segment Comportemental Dominant", "N/A")
-@@ -216,31 +240,15 @@
+
         # SEGMENT AFFINITAIRE GLOBAL + RANG
         st.subheader("🏆 Segment Affinitaire Dominant + Classement Global")
 
@@ -172,7 +170,7 @@ def _read_csv_optimized(source):
 
         # GRAPHIQUES SEGMENTATIONS
         st.subheader("📈 Graphiques des Segmentations")
-@@ -251,8 +259,8 @@
+
 
         # 1. Principalisation (Donut)
         with g1:
@@ -183,7 +181,7 @@ def _read_csv_optimized(source):
                 fig_prin = px.pie(
                     df_prin,
                     values="count",
-@@ -265,8 +273,8 @@
+
 
         # 2. Marketing (Donut)
         with g2:
@@ -194,7 +192,7 @@ def _read_csv_optimized(source):
                 fig_mkt = px.pie(
                     df_mkt,
                     values="count",
-@@ -279,13 +287,8 @@
+
 
         # 3. Affinitaire (Barres)
         with g3:
@@ -210,7 +208,7 @@ def _read_csv_optimized(source):
                 fig_aff_bar = px.bar(
                     df_aff_bar,
                     x="segment_affinitaire",
-@@ -299,13 +302,8 @@
+
 
         # 4. Affinitaire (Donut)
         with g4:
@@ -226,7 +224,7 @@ def _read_csv_optimized(source):
                 fig_aff_donut = px.pie(
                     df_aff_donut,
                     values="count",
-@@ -318,8 +316,8 @@
+
 
         # 5. Comportementale (Barres)
         with g5:
@@ -237,7 +235,7 @@ def _read_csv_optimized(source):
                 fig_comp = px.bar(
                     df_comp_bar,
                     x="segmentation_comportementale",
-@@ -333,43 +331,43 @@
+
 
         # 6. Heatmap Principalisation × Marketing
         with g6:
