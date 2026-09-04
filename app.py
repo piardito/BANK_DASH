@@ -405,9 +405,9 @@ if uploaded_file is not None:
 
         # 2. Segment marketing dominant
         if seg_mkt_counts is not None:
-            k2.metric("Segment Marketing Dominant", str(seg_mkt_counts["segmentation_marketing"][0]))
+            k2.metric("Segment Marketing", str(seg_mkt_counts["segmentation_marketing"][0]))
         else:
-            k2.metric("Segment Marketing Dominant", "N/A")
+            k2.metric("Segment Marketing", "N/A")
 
         # 3. % Digital autonomes
         if "seg_dig_auto" in df_filtered.columns:
@@ -423,10 +423,10 @@ if uploaded_file is not None:
         if seg_comp_counts is not None:
             seg_comp_dom = seg_comp_counts["segmentation_comportementale"][0]
             pct_comp_dom = (seg_comp_counts["count"][0] / total) * 100
-            k4.metric("Segment Comportemental Dominant", f"{seg_comp_dom}")
+            k4.metric("Segment Comportemental", f"{seg_comp_dom}")
             k4.caption(f"{pct_comp_dom:.1f}% du portefeuille")
         else:
-            k4.metric("Segment Comportemental Dominant", "N/A")
+            k4.metric("Segment Comportemental", "N/A")
 
         # CARTES TOP_
         top_columns = [
