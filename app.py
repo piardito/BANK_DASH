@@ -267,7 +267,12 @@ def _read_csv_optimized(source):
     avec des dtypes réduits, pour limiter le pic mémoire."""
     # Étape 1 : lire uniquement l'en-tête pour savoir quelles colonnes existent
     peek = pl.read_csv(source, separator=";", n_rows=0, ignore_errors=True)
-    cols_to_use = [c for c in USED_COLUMNS if c in peek.columns] or None
+    # IMPORTANT : on parcourt peek.columns (l'ordre RÉEL du fichier), pas
+    # USED_COLUMNS. Passer à Polars une liste de colonnes dans un ordre
+    # différent de celui du CSV source peut désaligner la lecture (des
+    # valeurs associées au mauvais nom de colonne). USED_COLUMNS sert
+    # uniquement de filtre "quelles colonnes garder", jamais d'ordre.
+    cols_to_use = [c for c in peek.columns if c in USED_COLUMNS] or None
 
     if hasattr(source, "seek"):
         source.seek(0)  # remettre le curseur après le peek
@@ -356,7 +361,6 @@ if uploaded_file is not None:
         # sur des centaines de milliers de lignes) : passage en Categorical
         # pour diviser fortement l'empreinte mémoire. Important sur un
         # environnement à RAM limitée (ex: Render Free, 512 Mo).
-        # seg_dig_auto est numérique (0/1) : pas de Categorical dessus.
         low_cardinality_cols = [
             "agence", "region", "grappe", "segmentation_marketing",
             "segmentation_comportementale", "conseiller",
