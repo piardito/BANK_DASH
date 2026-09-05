@@ -1,11 +1,20 @@
-import streamlit as st
-import polars as pl
-import zipfile
-import io
+"""Tableau de bord Streamlit de pilotage du portefeuille client.
+
+Permet de charger un fichier CSV (ou un ZIP contenant un CSV), d'appliquer
+des filtres dynamiques, et de visualiser les segmentations, indicateurs
+comportementaux et affinitaires du portefeuille.
+"""
+
 import gc
+import io
+import zipfile
+
+import pandas as pd
 import plotly.express as px
-import plotly.io as pio
 import plotly.graph_objects as go
+import plotly.io as pio
+import polars as pl
+import streamlit as st
 
 # CONFIG
 st.set_page_config(page_title="Portefeuille Client — Pilotage", layout="wide", page_icon="🏦")
@@ -20,7 +29,10 @@ COLOR_TEXT = "#26302B"         # charcoal, pas vert, pour le texte courant
 COLOR_MUTED = "#6B7570"
 COLOR_BORDER = "#E4E2DA"
 
-PALETTE_SEQ = ["#B08D57", "#2C3E42", "#6B8E7F", "#8C6A3F", "#16332B", "#C9B27C", "#4A5A54", "#A9744F"]
+PALETTE_SEQ = [
+    "#B08D57", "#2C3E42", "#6B8E7F", "#8C6A3F",
+    "#16332B", "#C9B27C", "#4A5A54", "#A9744F",
+]
 PALETTE_SCALE = ["#F7F7F5", "#C9B27C", "#B08D57", "#6B8E7F", "#16332B"]
 
 pio.templates["banque_premium"] = go.layout.Template(
@@ -37,9 +49,15 @@ pio.templates["banque_premium"] = go.layout.Template(
 )
 pio.templates.default = "banque_premium"
 
+FONT_IMPORT_URL = (
+    "https://fonts.googleapis.com/css2?"
+    "family=Source+Serif+4:wght@500;600;700"
+    "&family=Inter:wght@400;500;600;700&display=swap"
+)
+
 st.markdown(f"""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+    @import url('{FONT_IMPORT_URL}');
 
     html, body, [class*="css"] {{
         font-family: 'Inter', sans-serif;
@@ -232,7 +250,14 @@ with upload_col:
 with clear_col:
     st.write("")  # alignement vertical avec le file_uploader
     st.write("")
-    if st.button("🔄 Vider le cache", help="Force un rechargement complet du fichier (ignore tout résultat déjà mis en cache)."):
+    clear_cache_clicked = st.button(
+        "🔄 Vider le cache",
+        help=(
+            "Force un rechargement complet du fichier "
+            "(ignore tout résultat déjà mis en cache)."
+        ),
+    )
+    if clear_cache_clicked:
         st.cache_resource.clear()
         st.rerun()
 
@@ -271,6 +296,7 @@ DTYPE_OVERRIDES = {
     "TOP_PROFESSIONNEL_INDEPENDANT": pl.Int8,
 }
 
+
 @st.cache_resource
 def load_csv_stream(file_bytes):
     # NOTE IMPORTANTE SUR LE CACHE : Streamlit invalide le cache d'une
@@ -281,17 +307,16 @@ def load_csv_stream(file_bytes):
     # dupliquée dans load_zip ci-dessous) plutôt que factorisée dans une
     # fonction externe, pour qu'une future modification force bien un
     # nouveau calcul au lieu de servir un résultat périmé.
-    df_full = pl.read_csv(
-        file_bytes,
-        separator=";",
-        ignore_errors=True,
-        low_memory=False,
-        rechunk=True,
-    )
-
-    cols_to_use = [c for c in df_full.columns if c in USED_COLUMNS]
+    #
+    # OPTIMISATION VITESSE : scan_csv (lecture "lazy") + select() AVANT
+    # collect() permet à Polars d'ignorer purement et simplement le
+    # décodage des colonnes non utilisées (ex: segment_affinitaire) au
+    # lieu de les parser puis les jeter — gain net sur un fichier large.
+    lf = pl.scan_csv(file_bytes, separator=";", ignore_errors=True)
+    cols_to_use = [c for c in lf.columns if c in USED_COLUMNS]
     if cols_to_use:
-        df_full = df_full.select(cols_to_use)
+        lf = lf.select(cols_to_use)
+    df_full = lf.collect()
 
     cast_exprs = [
         pl.col(col_name).cast(dtype, strict=False).alias(col_name)
@@ -303,32 +328,35 @@ def load_csv_stream(file_bytes):
 
     return df_full
 
-@st.cache_resource(hash_funcs={"streamlit.runtime.uploaded_file_manager.UploadedFile": lambda f: f"{f.name}_{f.size}"})
+
+_UPLOADED_FILE_TYPE = "streamlit.runtime.uploaded_file_manager.UploadedFile"
+
+
+@st.cache_resource(
+    hash_funcs={_UPLOADED_FILE_TYPE: lambda f: f"{f.name}_{f.size}"}
+)
 def load_zip(file):
     with zipfile.ZipFile(file) as z:
         csv_name = next((n for n in z.namelist() if n.lower().endswith(".csv")), None)
         if csv_name is None:
             raise ValueError("Aucun CSV trouvé dans le ZIP.")
         with z.open(csv_name) as csv_file:
-            # Une seule lecture en bytes (pas de BytesIO en plus : évite une
-            # copie mémoire supplémentaire). On passe des bytes bruts, pas
-            # l'objet ZipExtFile, pour éviter que Polars ne tente de rouvrir
-            # le nom du fichier directement sur le disque.
+            # Une seule lecture en bytes (pas de BytesIO en plus qu'ici :
+            # scan_csv a besoin d'une source "seekable", ce que l'objet
+            # ZipExtFile ne garantit pas — on décompresse donc une fois en
+            # mémoire puis on l'enveloppe dans un BytesIO pour Polars.
             csv_bytes = csv_file.read()
 
-        df_full = pl.read_csv(
-            csv_bytes,
-            separator=";",
-            ignore_errors=True,
-            low_memory=False,
-            rechunk=True,
-        )
+        # OPTIMISATION VITESSE : lecture "lazy" + projection pushdown
+        # (select() avant collect()) : Polars ne décode que les colonnes
+        # réellement utilisées, au lieu de tout lire puis filtrer après coup.
+        lf = pl.scan_csv(io.BytesIO(csv_bytes), separator=";", ignore_errors=True)
+        cols_to_use = [c for c in lf.columns if c in USED_COLUMNS]
+        if cols_to_use:
+            lf = lf.select(cols_to_use)
+        df_full = lf.collect()
         del csv_bytes
         gc.collect()
-
-        cols_to_use = [c for c in df_full.columns if c in USED_COLUMNS]
-        if cols_to_use:
-            df_full = df_full.select(cols_to_use)
 
         cast_exprs = [
             pl.col(col_name).cast(dtype, strict=False).alias(col_name)
@@ -374,9 +402,18 @@ if uploaded_file is not None:
                 .alias("age")
             )
             with st.expander("🔧 Diagnostic colonne 'age'"):
-                st.write(f"Type détecté à la lecture : `{age_debug_dtype_before}`")
-                st.write(f"Exemples de valeurs brutes (avant nettoyage) : {age_debug_sample_before}")
-                st.write(f"Valeurs non nulles après nettoyage : {df['age'].drop_nulls().len():,}".replace(",", " "))
+                st.write(
+                    f"Type détecté à la lecture : `{age_debug_dtype_before}`"
+                )
+                st.write(
+                    "Exemples de valeurs brutes (avant nettoyage) : "
+                    f"{age_debug_sample_before}"
+                )
+                nb_age_valides = df["age"].drop_nulls().len()
+                st.write(
+                    f"Valeurs non nulles après nettoyage : {nb_age_valides:,}"
+                    .replace(",", " ")
+                )
 
         # Nettoyage texte (désactivable pour économiser la mémoire sur gros fichiers)
         clean_text = st.sidebar.checkbox("Nettoyer les espaces en trop (texte)", value=True)
@@ -406,6 +443,7 @@ if uploaded_file is not None:
 
         # FILTRES DYNAMIQUES
         st.sidebar.header("🔍 Filtres globaux")
+        st.sidebar.caption("Sélection multiple possible — laissez vide pour tout inclure.")
 
         df_filtered = df
 
@@ -417,16 +455,17 @@ if uploaded_file is not None:
                 values = nonlocal_df[col_name].unique().to_list()
                 values = [v for v in values if v is not None]
                 values = sorted([str(v) for v in values])
-                values = ["Tous"] + values
                 widget_key = f"filter_{col_name}_{uploaded_file.name}_{uploaded_file.size}"
-                # Si la sélection précédente n'existe plus dans la liste
-                # cascadée (ex: agence absente de la région choisie),
-                # on la réinitialise pour éviter une erreur Streamlit
-                if widget_key in st.session_state and st.session_state[widget_key] not in values:
-                    st.session_state[widget_key] = "Tous"
-                selected = st.sidebar.selectbox(label, values, key=widget_key)
-                if selected != "Tous" and selected in values:
-                    return nonlocal_df.filter(pl.col(col_name).cast(pl.Utf8) == selected)
+                # Si une sélection précédente n'existe plus dans la liste
+                # cascadée (ex: agence absente de la région choisie), on la
+                # retire pour éviter une erreur Streamlit.
+                if widget_key in st.session_state:
+                    valid_selection = [v for v in st.session_state[widget_key] if v in values]
+                    if valid_selection != st.session_state[widget_key]:
+                        st.session_state[widget_key] = valid_selection
+                selected = st.sidebar.multiselect(label, values, key=widget_key)
+                if selected:
+                    return nonlocal_df.filter(pl.col(col_name).cast(pl.Utf8).is_in(selected))
             return nonlocal_df
 
         df_filtered = add_filter("region", "Région")
@@ -443,11 +482,19 @@ if uploaded_file is not None:
 
         seg_mkt_counts = None
         if "segmentation_marketing" in df_filtered.columns and total > 0:
-            seg_mkt_counts = df_filtered["segmentation_marketing"].value_counts().sort("count", descending=True)
+            seg_mkt_counts = (
+                df_filtered["segmentation_marketing"]
+                .value_counts()
+                .sort("count", descending=True)
+            )
 
         seg_comp_counts = None
         if "segmentation_comportementale" in df_filtered.columns and total > 0:
-            seg_comp_counts = df_filtered["segmentation_comportementale"].value_counts().sort("count", descending=True)
+            seg_comp_counts = (
+                df_filtered["segmentation_comportementale"]
+                .value_counts()
+                .sort("count", descending=True)
+            )
 
         # Segment affinitaire : dérivé des colonnes TOP_ (le nombre de
         # clients à 1 sur chaque flag), et non plus de la colonne
@@ -499,7 +546,10 @@ if uploaded_file is not None:
         k1, k2, k3, k4 = st.columns(4)
 
         # 1. Clients uniques
-        nb_clients = df_filtered["client_id"].n_unique() if "client_id" in df_filtered.columns else total
+        if "client_id" in df_filtered.columns:
+            nb_clients = df_filtered["client_id"].n_unique()
+        else:
+            nb_clients = total
         k1.metric("Clients uniques", f"{nb_clients:,}".replace(",", " "))
 
         # 2. Segment marketing dominant
@@ -560,7 +610,10 @@ if uploaded_file is not None:
                     (pl.col("count") / total * 100).round(1).alias("% du portefeuille")
                 ])
                 .with_row_index("Rang", offset=1)
-                .rename({"segment_affinitaire": "Segment affinitaire (TOP_)", "count": "Nb clients"})
+                .rename({
+                    "segment_affinitaire": "Segment affinitaire (TOP_)",
+                    "count": "Nb clients",
+                })
                 .select(["Rang", "Segment affinitaire (TOP_)", "Nb clients", "% du portefeuille"])
                 .to_pandas()
             )
@@ -588,7 +641,10 @@ if uploaded_file is not None:
                 label="Tranche d'Âge Dominante",
                 value=str(age_dom)
             )
-            st.caption(f"{pct_age_dom:.1f}% des clients avec âge renseigné ({nb_age_renseigne:,} sur {total:,})".replace(",", " "))
+            st.caption(
+                f"{pct_age_dom:.1f}% des clients avec âge renseigné "
+                f"({nb_age_renseigne:,} sur {total:,})".replace(",", " ")
+            )
 
             df_age_rank = (
                 age_counts
@@ -705,7 +761,9 @@ if uploaded_file is not None:
 
         # 6. Heatmap Principalisation × Marketing
         with g6:
-            if "segmentation_principalisation" in df_filtered.columns and "segmentation_marketing" in df_filtered.columns and total > 0:
+            has_prin = "segmentation_principalisation" in df_filtered.columns
+            has_mkt = "segmentation_marketing" in df_filtered.columns
+            if has_prin and has_mkt and total > 0:
                 df_cross = (
                     df_filtered
                     .group_by(["segmentation_principalisation", "segmentation_marketing"])
@@ -726,8 +784,10 @@ if uploaded_file is not None:
         # 7. Répartition par tranche d'âge (Barres, ordre chronologique)
         with g7:
             if age_counts is not None:
-                import pandas as pd
-                age_order = ["< 25 ans", "25-34 ans", "35-44 ans", "45-54 ans", "55-64 ans", "65 ans et +"]
+                age_order = [
+                    "< 25 ans", "25-34 ans", "35-44 ans",
+                    "45-54 ans", "55-64 ans", "65 ans et +",
+                ]
                 df_age_bar = age_counts.to_pandas()
                 df_age_bar["tranche_age"] = pd.Categorical(
                     df_age_bar["tranche_age"], categories=age_order, ordered=True
