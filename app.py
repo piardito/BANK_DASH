@@ -423,63 +423,103 @@ if uploaded_file is not None:
             for step_name, seconds in load_timings.items():
                 st.write(f"{step_name} : {seconds:.2f} s")
 
-        # Nettoyage robuste de la colonne "age" : lue en texte brut, elle
-        # peut contenir des formats variés ("35", "35.0", "35,0", " 35 ",
-        # valeurs vides...). On nettoie et on caste en float d'abord (accepte
-        # les décimales) avant l'entier, ligne par ligne, sans jamais faire
-        # échouer toute la colonne pour quelques valeurs mal formées.
-        age_debug_dtype_before = None
-        age_debug_sample_before = None
-        if "age" in df.columns:
-            age_debug_dtype_before = df.schema["age"]
-            age_debug_sample_before = df["age"].drop_nulls().head(10).to_list()
-            df = df.with_columns(
-                pl.col("age")
-                .cast(pl.Utf8, strict=False)
-                .str.strip_chars()
-                .str.replace_all(",", ".")
-                .cast(pl.Float64, strict=False)
-                .round(0)
-                .cast(pl.Int16, strict=False)
-                .alias("age")
-            )
-            with st.expander("🔧 Diagnostic colonne 'age'"):
-                st.write(
-                    f"Type détecté à la lecture : `{age_debug_dtype_before}`"
-                )
-                st.write(
-                    "Exemples de valeurs brutes (avant nettoyage) : "
-                    f"{age_debug_sample_before}"
-                )
-                nb_age_valides = df["age"].drop_nulls().len()
-                st.write(
-                    f"Valeurs non nulles après nettoyage : {nb_age_valides:,}"
-                    .replace(",", " ")
-                )
-
         # Nettoyage texte (désactivable pour économiser la mémoire sur gros fichiers)
         clean_text = st.sidebar.checkbox("Nettoyer les espaces en trop (texte)", value=True)
-        if clean_text:
-            df = df.with_columns([
-                pl.col(pl.Utf8).str.strip_chars()
-            ])
 
-        # Colonnes à faible cardinalité (peu de valeurs distinctes répétées
-        # sur des centaines de milliers de lignes) : passage en Categorical
-        # pour diviser fortement l'empreinte mémoire. Important sur un
-        # environnement à RAM limitée (ex: Render Free, 512 Mo).
-        low_cardinality_cols = [
-            "agence", "region", "grappe", "segmentation_marketing",
-            "segmentation_comportementale", "conseiller",
-            "segmentation_principalisation",
-        ]
-        cast_exprs = [
-            pl.col(c).cast(pl.Categorical)
-            for c in low_cardinality_cols
-            if c in df.columns
-        ]
-        if cast_exprs:
-            df = df.with_columns(cast_exprs)
+        # NOTE VITESSE : ce bloc (nettoyage de "age", trim texte, passage en
+        # Categorical) portait sur les 700k lignes et se relançait à CHAQUE
+        # interaction (chaque clic sur un filtre relance tout le script),
+        # alors que son résultat ne dépend que du fichier chargé et de la
+        # case à cocher ci-dessus. On le mémorise donc dans st.session_state
+        # et on ne le recalcule que si le fichier ou la case a changé.
+        prep_key = (uploaded_file.name, uploaded_file.size, clean_text)
+        prep_just_recomputed = st.session_state.get("_prep_key") != prep_key
+        if prep_just_recomputed:
+            prep_timings = {}
+            df_prepared = df
+
+            # Nettoyage robuste de la colonne "age" : lue en texte brut,
+            # elle peut contenir des formats variés ("35", "35.0", "35,0",
+            # " 35 ", valeurs vides...). On caste en float d'abord (accepte
+            # les décimales) avant l'entier, sans jamais faire échouer
+            # toute la colonne pour quelques valeurs mal formées.
+            t0 = time.perf_counter()
+            age_diag = None
+            if "age" in df_prepared.columns:
+                age_diag = {
+                    "dtype_before": df_prepared.schema["age"],
+                    "sample_before": (
+                        df_prepared["age"].drop_nulls().head(10).to_list()
+                    ),
+                }
+                df_prepared = df_prepared.with_columns(
+                    pl.col("age")
+                    .cast(pl.Utf8, strict=False)
+                    .str.strip_chars()
+                    .str.replace_all(",", ".")
+                    .cast(pl.Float64, strict=False)
+                    .round(0)
+                    .cast(pl.Int16, strict=False)
+                    .alias("age")
+                )
+                age_diag["nb_valides"] = df_prepared["age"].drop_nulls().len()
+            prep_timings["Nettoyage colonne age"] = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            if clean_text:
+                df_prepared = df_prepared.with_columns([
+                    pl.col(pl.Utf8).str.strip_chars()
+                ])
+            prep_timings["Nettoyage espaces (texte)"] = time.perf_counter() - t0
+
+            # Colonnes à faible cardinalité (peu de valeurs distinctes
+            # répétées sur des centaines de milliers de lignes) : passage
+            # en Categorical pour diviser fortement l'empreinte mémoire.
+            t0 = time.perf_counter()
+            low_cardinality_cols = [
+                "agence", "region", "grappe", "segmentation_marketing",
+                "segmentation_comportementale", "conseiller",
+                "segmentation_principalisation",
+            ]
+            cat_cast_exprs = [
+                pl.col(c).cast(pl.Categorical)
+                for c in low_cardinality_cols
+                if c in df_prepared.columns
+            ]
+            if cat_cast_exprs:
+                df_prepared = df_prepared.with_columns(cat_cast_exprs)
+            prep_timings["Passage en Categorical"] = time.perf_counter() - t0
+
+            st.session_state["_prep_key"] = prep_key
+            st.session_state["_prep_df"] = df_prepared
+            st.session_state["_prep_age_diag"] = age_diag
+            st.session_state["_prep_timings"] = prep_timings
+
+        df = st.session_state["_prep_df"]
+        age_diag = st.session_state["_prep_age_diag"]
+
+        with st.expander("⏱️ Performance de la préparation des données"):
+            if prep_just_recomputed:
+                st.caption(
+                    "Recalculée à l'instant (nouveau fichier ou case "
+                    "à cocher modifiée) :"
+                )
+            else:
+                st.caption("Réutilisée depuis le cache de session (inchangée).")
+            for step_name, seconds in st.session_state["_prep_timings"].items():
+                st.write(f"{step_name} : {seconds:.2f} s")
+
+        if age_diag is not None:
+            with st.expander("🔧 Diagnostic colonne 'age'"):
+                st.write(f"Type détecté à la lecture : `{age_diag['dtype_before']}`")
+                st.write(
+                    "Exemples de valeurs brutes (avant nettoyage) : "
+                    f"{age_diag['sample_before']}"
+                )
+                st.write(
+                    f"Valeurs non nulles après nettoyage : "
+                    f"{age_diag['nb_valides']:,}".replace(",", " ")
+                )
 
         st.success("Chargement terminé ✔️")
 
