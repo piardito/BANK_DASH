@@ -223,10 +223,18 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # UPLOAD ZIP / CSV
-uploaded_file = st.file_uploader(
-    "Déposez un fichier ZIP ou CSV (jusqu’à ~100 Mo, séparateur ;)",
-    type=["zip", "csv"]
-)
+upload_col, clear_col = st.columns([5, 1])
+with upload_col:
+    uploaded_file = st.file_uploader(
+        "Déposez un fichier ZIP ou CSV (jusqu’à ~100 Mo, séparateur ;)",
+        type=["zip", "csv"]
+    )
+with clear_col:
+    st.write("")  # alignement vertical avec le file_uploader
+    st.write("")
+    if st.button("🔄 Vider le cache", help="Force un rechargement complet du fichier (ignore tout résultat déjà mis en cache)."):
+        st.cache_resource.clear()
+        st.rerun()
 
 # Colonnes réellement utilisées par ce dashboard : si le fichier réel en
 # contient d'autres, elles ne sont même pas parsées (gain mémoire direct).
@@ -248,10 +256,11 @@ USED_COLUMNS = [
 # d'un Int64 (8 octets), Int8 (1 octet) suffit largement. seg_dig_auto est
 # aussi un flag 0/1 entier -> Int8.
 # Ces casts sont appliqués APRÈS la lecture complète du CSV (voir
-# _read_csv_optimized), avec strict=False : une valeur mal formée dans une
-# colonne devient simplement null pour cette ligne-là, sans jamais annuler
-# toute la colonne. "age" n'est pas ici : elle est nettoyée séparément
-# juste après le chargement (gère les décimales/virgules/espaces).
+# load_csv_stream / load_zip ci-dessous), avec strict=False : une valeur
+# mal formée dans une colonne devient simplement null pour cette ligne-là,
+# sans jamais annuler toute la colonne. "age" n'est pas ici : elle est
+# nettoyée séparément juste après le chargement (gère les
+# décimales/virgules/espaces).
 DTYPE_OVERRIDES = {
     "client_id": pl.Int32,
     "seg_dig_auto": pl.Int8,
@@ -262,35 +271,28 @@ DTYPE_OVERRIDES = {
     "TOP_PROFESSIONNEL_INDEPENDANT": pl.Int8,
 }
 
-def _read_csv_optimized(source):
-    """Lit un CSV (bytes ou flux) intégralement, puis réduit aux colonnes
-    utiles et applique des dtypes compacts APRÈS la lecture.
-
-    Choix volontaire : passer `columns=` et `schema_overrides=` directement
-    à pl.read_csv (comme avant) s'est révélé peu fiable sur de gros fichiers
-    (colonnes silencieusement perdues). Lire d'abord tout le fichier avec
-    Polars garantit que chaque nom de colonne du header est respecté, puis
-    on réduit et on caste ensuite avec `strict=False` (une valeur mal
-    formée devient simplement null, sans jamais faire disparaître toute
-    une colonne ou toute une ligne).
-    """
+@st.cache_resource
+def load_csv_stream(file_bytes):
+    # NOTE IMPORTANTE SUR LE CACHE : Streamlit invalide le cache d'une
+    # fonction @st.cache_resource quand LE CODE DE CETTE FONCTION change,
+    # mais ne suit pas les changements d'une fonction helper appelée à
+    # l'intérieur si le corps de CETTE fonction reste identique. Toute la
+    # logique de lecture/nettoyage est donc écrite directement ici (et
+    # dupliquée dans load_zip ci-dessous) plutôt que factorisée dans une
+    # fonction externe, pour qu'une future modification force bien un
+    # nouveau calcul au lieu de servir un résultat périmé.
     df_full = pl.read_csv(
-        source,
+        file_bytes,
         separator=";",
         ignore_errors=True,
         low_memory=False,
         rechunk=True,
     )
 
-    # Réduction aux colonnes utiles, dans l'ordre où elles apparaissent
-    # réellement dans le fichier.
     cols_to_use = [c for c in df_full.columns if c in USED_COLUMNS]
     if cols_to_use:
         df_full = df_full.select(cols_to_use)
 
-    # Cast compact APRÈS coup, colonne par colonne, en tolérant les valeurs
-    # mal formées (strict=False -> null ponctuel, jamais de colonne entière
-    # perdue).
     cast_exprs = [
         pl.col(col_name).cast(dtype, strict=False).alias(col_name)
         for col_name, dtype in DTYPE_OVERRIDES.items()
@@ -300,10 +302,6 @@ def _read_csv_optimized(source):
         df_full = df_full.with_columns(cast_exprs)
 
     return df_full
-
-@st.cache_resource
-def load_csv_stream(file_bytes):
-    return _read_csv_optimized(file_bytes)
 
 @st.cache_resource(hash_funcs={"streamlit.runtime.uploaded_file_manager.UploadedFile": lambda f: f"{f.name}_{f.size}"})
 def load_zip(file):
@@ -317,10 +315,31 @@ def load_zip(file):
             # l'objet ZipExtFile, pour éviter que Polars ne tente de rouvrir
             # le nom du fichier directement sur le disque.
             csv_bytes = csv_file.read()
-        result = _read_csv_optimized(csv_bytes)
+
+        df_full = pl.read_csv(
+            csv_bytes,
+            separator=";",
+            ignore_errors=True,
+            low_memory=False,
+            rechunk=True,
+        )
         del csv_bytes
         gc.collect()
-        return result
+
+        cols_to_use = [c for c in df_full.columns if c in USED_COLUMNS]
+        if cols_to_use:
+            df_full = df_full.select(cols_to_use)
+
+        cast_exprs = [
+            pl.col(col_name).cast(dtype, strict=False).alias(col_name)
+            for col_name, dtype in DTYPE_OVERRIDES.items()
+            if col_name in df_full.columns
+        ]
+        if cast_exprs:
+            df_full = df_full.with_columns(cast_exprs)
+
+        gc.collect()
+        return df_full
 
 
 # MAIN LOGIC
