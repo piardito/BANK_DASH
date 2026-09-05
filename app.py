@@ -237,21 +237,24 @@ uploaded_file = st.file_uploader(
 USED_COLUMNS = [
     "client_id", "agence", "region", "grappe",
     "segmentation_marketing", "segmentation_comportementale",
-    "segmentation_affinitaire",
-    "seg_dig_auto",
+    "seg_dig_auto", "age",
     "TOP_TERRITORIAL_ENGAGE", "TOP_OPTIMISATEUR_MULTIBANCARISE",
     "TOP_JOUEUR_INVESTISSEUR", "TOP_PRUDENT_INSTALLE",
     "TOP_PROFESSIONNEL_INDEPENDANT",
-    "conseiller", "age","segmentation_principalisation",
+    "conseiller", "segmentation_principalisation",
 ]
 
 # Types réduits pour les colonnes numériques : un flag 0/1 n'a pas besoin
 # d'un Int64 (8 octets), Int8 (1 octet) suffit largement. seg_dig_auto est
-# aussi un flag 0/1 entier -> Int8. age tient sur un Int16.
+# aussi un flag 0/1 entier -> Int8.
+# "age" n'est volontairement PAS forcée en Int16 ici : si une seule valeur
+# du fichier n'est pas un entier pur (ex: "35.0", "35,0", espace, vide),
+# le cast pendant la lecture CSV (avec ignore_errors) peut annuler TOUTE
+# la colonne au lieu de juste la ligne fautive. Elle est donc lue en texte
+# puis nettoyée/convertie proprement juste après le chargement.
 DTYPE_OVERRIDES = {
     "client_id": pl.Int32,
     "seg_dig_auto": pl.Int8,
-    "age": pl.Int16,
     "TOP_TERRITORIAL_ENGAGE": pl.Int8,
     "TOP_OPTIMISATEUR_MULTIBANCARISE": pl.Int8,
     "TOP_JOUEUR_INVESTISSEUR": pl.Int8,
@@ -316,6 +319,31 @@ if uploaded_file is not None:
             df = load_csv_stream(uploaded_file)
         df = df.rechunk()  # consolide les fragments issus du parsing low_memory
         gc.collect()
+
+        # Nettoyage robuste de la colonne "age" : lue en texte brut, elle
+        # peut contenir des formats variés ("35", "35.0", "35,0", " 35 ",
+        # valeurs vides...). On nettoie et on caste en float d'abord (accepte
+        # les décimales) avant l'entier, ligne par ligne, sans jamais faire
+        # échouer toute la colonne pour quelques valeurs mal formées.
+        age_debug_dtype_before = None
+        age_debug_sample_before = None
+        if "age" in df.columns:
+            age_debug_dtype_before = df.schema["age"]
+            age_debug_sample_before = df["age"].drop_nulls().head(10).to_list()
+            df = df.with_columns(
+                pl.col("age")
+                .cast(pl.Utf8, strict=False)
+                .str.strip_chars()
+                .str.replace_all(",", ".")
+                .cast(pl.Float64, strict=False)
+                .round(0)
+                .cast(pl.Int16, strict=False)
+                .alias("age")
+            )
+            with st.expander("🔧 Diagnostic colonne 'age'"):
+                st.write(f"Type détecté à la lecture : `{age_debug_dtype_before}`")
+                st.write(f"Exemples de valeurs brutes (avant nettoyage) : {age_debug_sample_before}")
+                st.write(f"Valeurs non nulles après nettoyage : {df['age'].drop_nulls().len():,}".replace(",", " "))
 
         # Nettoyage texte (désactivable pour économiser la mémoire sur gros fichiers)
         clean_text = st.sidebar.checkbox("Nettoyer les espaces en trop (texte)", value=True)
@@ -553,7 +581,15 @@ if uploaded_file is not None:
                 },
             )
         else:
-            st.info("Colonne 'age' absente ou non renseignée : répartition non disponible.")
+            if "age" in df_filtered.columns:
+                st.info(
+                    f"Colonne 'age' trouvée mais aucune valeur numérique exploitable "
+                    f"après nettoyage (0 valeur valide sur {total:,} lignes). "
+                    f"Vérifiez le contenu réel de cette colonne dans le fichier."
+                    .replace(",", " ")
+                )
+            else:
+                st.info("Colonne 'age' absente du fichier chargé.")
 
         # GRAPHIQUES SEGMENTATIONS
         st.subheader("📈 Graphiques des Segmentations")
