@@ -7,6 +7,7 @@ comportementaux et affinitaires du portefeuille.
 
 import gc
 import io
+import time
 import zipfile
 
 import pandas as pd
@@ -297,6 +298,39 @@ DTYPE_OVERRIDES = {
 }
 
 
+def _scan_and_select(source):
+    """Lit un CSV en mode "lazy" et projette sur USED_COLUMNS.
+
+    Essaie d'abord SANS `ignore_errors` (chemin rapide de Polars, qui
+    n'est pas ralenti par la logique de tolérance aux erreurs) ; ne
+    retombe sur `ignore_errors=True` (plus lent, mais tolérant) que si
+    la première tentative échoue réellement. Sur un fichier propre,
+    c'est le principal gain de vitesse possible ici : le fait de ne
+    lire que 15 colonnes sur 16 (voir USED_COLUMNS) n'a en soi qu'un
+    effet marginal.
+
+    Note : factorisée ici (DRY) plutôt que dupliquée dans load_csv_stream
+    et load_zip. Revers de la médaille — voir la note sur le cache dans
+    load_csv_stream ci-dessous — si cette fonction change seule sans que
+    load_csv_stream/load_zip ne changent, Streamlit peut ne pas invalider
+    leur cache automatiquement : utiliser le bouton "🔄 Vider le cache"
+    de l'interface après une modification de cette fonction.
+    """
+    for ignore_errors in (False, True):
+        try:
+            lf = pl.scan_csv(source, separator=";", ignore_errors=ignore_errors)
+            cols_to_use = [c for c in lf.columns if c in USED_COLUMNS]
+            if cols_to_use:
+                lf = lf.select(cols_to_use)
+            return lf.collect()
+        except Exception:
+            if ignore_errors:
+                raise
+            if hasattr(source, "seek"):
+                source.seek(0)
+    raise RuntimeError("Lecture CSV impossible.")  # inatteignable en pratique
+
+
 @st.cache_resource
 def load_csv_stream(file_bytes):
     # NOTE IMPORTANTE SUR LE CACHE : Streamlit invalide le cache d'une
@@ -307,17 +341,13 @@ def load_csv_stream(file_bytes):
     # dupliquée dans load_zip ci-dessous) plutôt que factorisée dans une
     # fonction externe, pour qu'une future modification force bien un
     # nouveau calcul au lieu de servir un résultat périmé.
-    #
-    # OPTIMISATION VITESSE : scan_csv (lecture "lazy") + select() AVANT
-    # collect() permet à Polars d'ignorer purement et simplement le
-    # décodage des colonnes non utilisées (ex: segment_affinitaire) au
-    # lieu de les parser puis les jeter — gain net sur un fichier large.
-    lf = pl.scan_csv(file_bytes, separator=";", ignore_errors=True)
-    cols_to_use = [c for c in lf.columns if c in USED_COLUMNS]
-    if cols_to_use:
-        lf = lf.select(cols_to_use)
-    df_full = lf.collect()
+    timings = {}
 
+    t0 = time.perf_counter()
+    df_full = _scan_and_select(file_bytes)
+    timings["Lecture + sélection des colonnes"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
     cast_exprs = [
         pl.col(col_name).cast(dtype, strict=False).alias(col_name)
         for col_name, dtype in DTYPE_OVERRIDES.items()
@@ -325,8 +355,11 @@ def load_csv_stream(file_bytes):
     ]
     if cast_exprs:
         df_full = df_full.with_columns(cast_exprs)
+    df_full = df_full.rechunk()
+    timings["Cast des types + rechunk"] = time.perf_counter() - t0
 
-    return df_full
+    gc.collect()
+    return df_full, timings
 
 
 _UPLOADED_FILE_TYPE = "streamlit.runtime.uploaded_file_manager.UploadedFile"
@@ -336,28 +369,28 @@ _UPLOADED_FILE_TYPE = "streamlit.runtime.uploaded_file_manager.UploadedFile"
     hash_funcs={_UPLOADED_FILE_TYPE: lambda f: f"{f.name}_{f.size}"}
 )
 def load_zip(file):
+    timings = {}
+
     with zipfile.ZipFile(file) as z:
         csv_name = next((n for n in z.namelist() if n.lower().endswith(".csv")), None)
         if csv_name is None:
             raise ValueError("Aucun CSV trouvé dans le ZIP.")
+
+        t0 = time.perf_counter()
         with z.open(csv_name) as csv_file:
-            # Une seule lecture en bytes (pas de BytesIO en plus qu'ici :
-            # scan_csv a besoin d'une source "seekable", ce que l'objet
-            # ZipExtFile ne garantit pas — on décompresse donc une fois en
-            # mémoire puis on l'enveloppe dans un BytesIO pour Polars.
+            # Une seule lecture en bytes : scan_csv a besoin d'une source
+            # "seekable", ce que l'objet ZipExtFile ne garantit pas — on
+            # décompresse donc une fois en mémoire puis on l'enveloppe
+            # dans un BytesIO pour Polars.
             csv_bytes = csv_file.read()
+        timings["Décompression du ZIP"] = time.perf_counter() - t0
 
-        # OPTIMISATION VITESSE : lecture "lazy" + projection pushdown
-        # (select() avant collect()) : Polars ne décode que les colonnes
-        # réellement utilisées, au lieu de tout lire puis filtrer après coup.
-        lf = pl.scan_csv(io.BytesIO(csv_bytes), separator=";", ignore_errors=True)
-        cols_to_use = [c for c in lf.columns if c in USED_COLUMNS]
-        if cols_to_use:
-            lf = lf.select(cols_to_use)
-        df_full = lf.collect()
+        t0 = time.perf_counter()
+        df_full = _scan_and_select(io.BytesIO(csv_bytes))
+        timings["Lecture + sélection des colonnes"] = time.perf_counter() - t0
         del csv_bytes
-        gc.collect()
 
+        t0 = time.perf_counter()
         cast_exprs = [
             pl.col(col_name).cast(dtype, strict=False).alias(col_name)
             for col_name, dtype in DTYPE_OVERRIDES.items()
@@ -365,9 +398,11 @@ def load_zip(file):
         ]
         if cast_exprs:
             df_full = df_full.with_columns(cast_exprs)
+        df_full = df_full.rechunk()
+        timings["Cast des types + rechunk"] = time.perf_counter() - t0
 
         gc.collect()
-        return df_full
+        return df_full, timings
 
 
 # MAIN LOGIC
@@ -375,11 +410,18 @@ if uploaded_file is not None:
     try:
         # Chargement
         if uploaded_file.name.lower().endswith(".zip"):
-            df = load_zip(uploaded_file)
+            df, load_timings = load_zip(uploaded_file)
         else:
-            df = load_csv_stream(uploaded_file)
-        df = df.rechunk()  # consolide les fragments issus du parsing low_memory
-        gc.collect()
+            df, load_timings = load_csv_stream(uploaded_file)
+        # NOTE VITESSE : rechunk()/gc.collect() sont faits UNE SEULE FOIS,
+        # à l'intérieur des fonctions @st.cache_resource ci-dessus — donc
+        # uniquement lors d'un vrai chargement, jamais à chaque interaction
+        # (chaque clic sur un filtre relance ce script en entier ; les
+        # refaire ici à chaque fois coûtait du temps pour rien puisque `df`
+        # vient alors du cache, déjà nettoyé).
+        with st.expander("⏱️ Performance du chargement"):
+            for step_name, seconds in load_timings.items():
+                st.write(f"{step_name} : {seconds:.2f} s")
 
         # Nettoyage robuste de la colonne "age" : lue en texte brut, elle
         # peut contenir des formats variés ("35", "35.0", "35,0", " 35 ",
