@@ -230,10 +230,14 @@ uploaded_file = st.file_uploader(
 
 # Colonnes réellement utilisées par ce dashboard : si le fichier réel en
 # contient d'autres, elles ne sont même pas parsées (gain mémoire direct).
+# NB : "segment_affinitaire" n'est plus utilisée — le segment affinitaire
+# est désormais dérivé des colonnes TOP_. "age" a été ajoutée pour la
+# répartition par tranche d'âge (renommez-la ici si votre colonne porte
+# un autre nom dans le CSV).
 USED_COLUMNS = [
     "client_id", "agence", "region", "grappe",
     "segmentation_marketing", "segmentation_comportementale",
-    "segment_affinitaire", "seg_dig_auto",
+    "seg_dig_auto", "age",
     "TOP_TERRITORIAL_ENGAGE", "TOP_OPTIMISATEUR_MULTIBANCARISE",
     "TOP_JOUEUR_INVESTISSEUR", "TOP_PRUDENT_INSTALLE",
     "TOP_PROFESSIONNEL_INDEPENDANT",
@@ -241,9 +245,12 @@ USED_COLUMNS = [
 ]
 
 # Types réduits pour les colonnes numériques : un flag 0/1 n'a pas besoin
-# d'un Int64 (8 octets), Int8 (1 octet) suffit largement.
+# d'un Int64 (8 octets), Int8 (1 octet) suffit largement. seg_dig_auto est
+# aussi un flag 0/1 entier -> Int8. age tient sur un Int16.
 DTYPE_OVERRIDES = {
     "client_id": pl.Int32,
+    "seg_dig_auto": pl.Int8,
+    "age": pl.Int16,
     "TOP_TERRITORIAL_ENGAGE": pl.Int8,
     "TOP_OPTIMISATEUR_MULTIBANCARISE": pl.Int8,
     "TOP_JOUEUR_INVESTISSEUR": pl.Int8,
@@ -320,10 +327,11 @@ if uploaded_file is not None:
         # sur des centaines de milliers de lignes) : passage en Categorical
         # pour diviser fortement l'empreinte mémoire. Important sur un
         # environnement à RAM limitée (ex: Render Free, 512 Mo).
+        # seg_dig_auto est numérique (0/1) : pas de Categorical dessus.
         low_cardinality_cols = [
             "agence", "region", "grappe", "segmentation_marketing",
-            "segmentation_comportementale", "segment_affinitaire",
-            "seg_dig_auto", "conseiller", "segmentation_principalisation",
+            "segmentation_comportementale", "conseiller",
+            "segmentation_principalisation",
         ]
         cast_exprs = [
             pl.col(c).cast(pl.Categorical)
@@ -380,19 +388,49 @@ if uploaded_file is not None:
         if "segmentation_comportementale" in df_filtered.columns and total > 0:
             seg_comp_counts = df_filtered["segmentation_comportementale"].value_counts().sort("count", descending=True)
 
+        # Segment affinitaire : dérivé des colonnes TOP_ (le nombre de
+        # clients à 1 sur chaque flag), et non plus de la colonne
+        # "segmentation_affinitaire" qui n'est plus utilisée du tout.
+        top_columns = [
+            ("TOP_TERRITORIAL_ENGAGE", "Territorial Engagé"),
+            ("TOP_OPTIMISATEUR_MULTIBANCARISE", "Optimisateur Multibancarisé"),
+            ("TOP_JOUEUR_INVESTISSEUR", "Joueur Investisseur"),
+            ("TOP_PRUDENT_INSTALLE", "Prudent Installé"),
+            ("TOP_PROFESSIONNEL_INDEPENDANT", "Professionnel Indépendant"),
+        ]
+        top_present = [(c, l) for c, l in top_columns if c in df_filtered.columns]
+
         seg_aff_counts = None
-        if "segment_affinitaire" in df_filtered.columns and total > 0:
-            df_aff_clean = df_filtered.filter(
-                pl.col("segment_affinitaire").is_not_null() &
-                (pl.col("segment_affinitaire").cast(pl.Utf8).str.strip_chars() != "") &
-                (pl.col("segment_affinitaire").cast(pl.Utf8).str.to_lowercase() != "none")
-            )
-            if len(df_aff_clean) > 0:
-                seg_aff_counts = df_aff_clean["segment_affinitaire"].value_counts().sort("count", descending=True)
+        if top_present and total > 0:
+            aff_rows = []
+            for col_name, label in top_present:
+                nb_top = df_filtered.filter(
+                    pl.col(col_name).cast(pl.Float64, strict=False) == 1
+                ).height
+                aff_rows.append({"segment_affinitaire": label, "count": nb_top})
+            seg_aff_counts = pl.DataFrame(aff_rows).sort("count", descending=True)
 
         seg_prin_counts = None
         if "segmentation_principalisation" in df_filtered.columns and total > 0:
             seg_prin_counts = df_filtered["segmentation_principalisation"].value_counts()
+
+        # Répartition par tranche d'âge
+        age_counts = None
+        nb_age_renseigne = 0
+        if "age" in df_filtered.columns and total > 0:
+            df_age = df_filtered.filter(pl.col("age").is_not_null())
+            nb_age_renseigne = len(df_age)
+            if nb_age_renseigne > 0:
+                df_age = df_age.with_columns(
+                    pl.when(pl.col("age") < 25).then(pl.lit("< 25 ans"))
+                    .when(pl.col("age") < 35).then(pl.lit("25-34 ans"))
+                    .when(pl.col("age") < 45).then(pl.lit("35-44 ans"))
+                    .when(pl.col("age") < 55).then(pl.lit("45-54 ans"))
+                    .when(pl.col("age") < 65).then(pl.lit("55-64 ans"))
+                    .otherwise(pl.lit("65 ans et +"))
+                    .alias("tranche_age")
+                )
+                age_counts = df_age["tranche_age"].value_counts().sort("count", descending=True)
 
         # KPIs
         st.subheader("📊 KPIs Principaux")
@@ -409,12 +447,12 @@ if uploaded_file is not None:
         else:
             k2.metric("Segment Marketing", "N/A")
 
-        # 3. % Digital autonomes
+        # 3. % Digital autonomes : seg_dig_auto est un flag entier 0/1
         if "seg_dig_auto" in df_filtered.columns:
-            df_dig = df_filtered.filter(
-                pl.col("seg_dig_auto").cast(pl.Utf8).str.to_lowercase().is_in(["oui", "1", "actif", "autonome"])
-            )
-            pct_dig = (len(df_dig) / total) * 100 if total > 0 else 0
+            nb_dig = df_filtered.filter(
+                pl.col("seg_dig_auto").cast(pl.Float64, strict=False) == 1
+            ).height
+            pct_dig = (nb_dig / total) * 100 if total > 0 else 0
             k3.metric("% Digital Autonomes", f"{pct_dig:.1f}%")
         else:
             k3.metric("% Digital Autonomes", "N/A")
@@ -428,31 +466,24 @@ if uploaded_file is not None:
         else:
             k4.metric("Segment Comportemental", "N/A")
 
-        # CARTES TOP_
-        top_columns = [
-            ("TOP_TERRITORIAL_ENGAGE", "Territorial Engagé"),
-            ("TOP_OPTIMISATEUR_MULTIBANCARISE", "Optimisateur Multibancarisé"),
-            ("TOP_JOUEUR_INVESTISSEUR", "Joueur Investisseur"),
-            ("TOP_PRUDENT_INSTALLE", "Prudent Installé"),
-            ("TOP_PROFESSIONNEL_INDEPENDANT", "Professionnel Indépendant"),
-        ]
-        top_present = [(c, l) for c, l in top_columns if c in df_filtered.columns]
-
-        if top_present and total > 0:
+        # CARTES TOP_ (réutilise seg_aff_counts, pas de recomptage)
+        if top_present and seg_aff_counts is not None and total > 0:
             st.subheader("🏅 Indicateurs TOP")
             top_cols_ui = st.columns(len(top_present))
+            aff_lookup = dict(zip(
+                seg_aff_counts["segment_affinitaire"].to_list(),
+                seg_aff_counts["count"].to_list(),
+            ))
             for (col_name, label), ui_col in zip(top_present, top_cols_ui):
-                nb_top = df_filtered.filter(
-                    pl.col(col_name).cast(pl.Float64, strict=False) == 1
-                ).height
+                nb_top = aff_lookup.get(label, 0)
                 pct_top = (nb_top / total) * 100
                 ui_col.metric(label, f"{nb_top:,}".replace(",", " "))
                 ui_col.caption(f"{pct_top:.1f}% du portefeuille")
 
-        # SEGMENT AFFINITAIRE GLOBAL + RANG
-        st.subheader("🏆 Segment Affinitaire Dominant + Classement Global")
+        # SEGMENT AFFINITAIRE GLOBAL + RANG (basé sur les colonnes TOP_)
+        st.subheader("🏆 Segment Affinitaire Dominant (TOP_) + Classement Global")
 
-        if seg_aff_counts is not None:
+        if seg_aff_counts is not None and len(seg_aff_counts) > 0:
             seg_aff_dom_global = seg_aff_counts["segment_affinitaire"][0]
             pct_aff_global = (seg_aff_counts["count"][0] / total) * 100
 
@@ -467,7 +498,9 @@ if uploaded_file is not None:
                 .with_columns([
                     (pl.col("count") / total * 100).round(1).alias("% du portefeuille")
                 ])
-                .rename({"segment_affinitaire": "Segment affinitaire", "count": "Nb clients"})
+                .with_row_index("Rang", offset=1)
+                .rename({"segment_affinitaire": "Segment affinitaire (TOP_)", "count": "Nb clients"})
+                .select(["Rang", "Segment affinitaire (TOP_)", "Nb clients", "% du portefeuille"])
                 .to_pandas()
             )
             st.dataframe(
@@ -475,6 +508,7 @@ if uploaded_file is not None:
                 use_container_width=True,
                 hide_index=True,
                 column_config={
+                    "Rang": st.column_config.NumberColumn("Rang", format="%d"),
                     "% du portefeuille": st.column_config.ProgressColumn(
                         "% du portefeuille", format="%.1f%%", min_value=0, max_value=100
                     ),
@@ -482,12 +516,51 @@ if uploaded_file is not None:
                 },
             )
 
+        # RÉPARTITION PAR TRANCHE D'ÂGE + CLASSEMENT
+        st.subheader("📅 Répartition par Tranche d'Âge + Classement")
+
+        if age_counts is not None and len(age_counts) > 0:
+            age_dom = age_counts["tranche_age"][0]
+            pct_age_dom = (age_counts["count"][0] / nb_age_renseigne) * 100
+
+            st.metric(
+                label="Tranche d'Âge Dominante",
+                value=str(age_dom)
+            )
+            st.caption(f"{pct_age_dom:.1f}% des clients avec âge renseigné ({nb_age_renseigne:,} sur {total:,})".replace(",", " "))
+
+            df_age_rank = (
+                age_counts
+                .with_columns([
+                    (pl.col("count") / nb_age_renseigne * 100).round(1).alias("% du portefeuille")
+                ])
+                .with_row_index("Rang", offset=1)
+                .rename({"tranche_age": "Tranche d'âge", "count": "Nb clients"})
+                .select(["Rang", "Tranche d'âge", "Nb clients", "% du portefeuille"])
+                .to_pandas()
+            )
+            st.dataframe(
+                df_age_rank,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Rang": st.column_config.NumberColumn("Rang", format="%d"),
+                    "% du portefeuille": st.column_config.ProgressColumn(
+                        "% du portefeuille", format="%.1f%%", min_value=0, max_value=100
+                    ),
+                    "Nb clients": st.column_config.NumberColumn("Nb clients", format="%d"),
+                },
+            )
+        else:
+            st.info("Colonne 'age' absente ou non renseignée : répartition non disponible.")
+
         # GRAPHIQUES SEGMENTATIONS
         st.subheader("📈 Graphiques des Segmentations")
 
         g1, g2 = st.columns(2)
         g3, g4 = st.columns(2)
         g5, g6 = st.columns(2)
+        g7, g8 = st.columns(2)
 
         # 1. Principalisation (Donut)
         with g1:
@@ -517,7 +590,7 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_mkt, use_container_width=True)
 
-        # 3. Affinitaire (Barres)
+        # 3. Affinitaire TOP_ (Barres)
         with g3:
             if seg_aff_counts is not None:
                 df_aff_bar = seg_aff_counts.to_pandas()
@@ -525,14 +598,14 @@ if uploaded_file is not None:
                     df_aff_bar,
                     x="segment_affinitaire",
                     y="count",
-                    title="Segments Affinitaires (Classement)",
+                    title="Segments Affinitaires TOP_ (Classement)",
                     text_auto=True,
                     color="count",
                     color_continuous_scale=PALETTE_SCALE
                 )
                 st.plotly_chart(fig_aff_bar, use_container_width=True)
 
-        # 4. Affinitaire (Donut)
+        # 4. Affinitaire TOP_ (Donut)
         with g4:
             if seg_aff_counts is not None:
                 df_aff_donut = seg_aff_counts.to_pandas()
@@ -540,7 +613,7 @@ if uploaded_file is not None:
                     df_aff_donut,
                     values="count",
                     names="segment_affinitaire",
-                    title="Répartition Affinitaire",
+                    title="Répartition Affinitaire (TOP_)",
                     hole=0.45,
                     color_discrete_sequence=PALETTE_SEQ
                 )
@@ -580,6 +653,27 @@ if uploaded_file is not None:
                     color_continuous_scale=PALETTE_SCALE
                 )
                 st.plotly_chart(fig_cross, use_container_width=True)
+
+        # 7. Répartition par tranche d'âge (Barres, ordre chronologique)
+        with g7:
+            if age_counts is not None:
+                import pandas as pd
+                age_order = ["< 25 ans", "25-34 ans", "35-44 ans", "45-54 ans", "55-64 ans", "65 ans et +"]
+                df_age_bar = age_counts.to_pandas()
+                df_age_bar["tranche_age"] = pd.Categorical(
+                    df_age_bar["tranche_age"], categories=age_order, ordered=True
+                )
+                df_age_bar = df_age_bar.sort_values("tranche_age")
+                fig_age = px.bar(
+                    df_age_bar,
+                    x="tranche_age",
+                    y="count",
+                    title="Répartition par Tranche d'Âge",
+                    text_auto=True,
+                    color="count",
+                    color_continuous_scale=PALETTE_SCALE
+                )
+                st.plotly_chart(fig_age, use_container_width=True)
 
         # EXPORT
         def export_csv(df_export):
