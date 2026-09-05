@@ -237,11 +237,12 @@ uploaded_file = st.file_uploader(
 USED_COLUMNS = [
     "client_id", "agence", "region", "grappe",
     "segmentation_marketing", "segmentation_comportementale",
-    "seg_dig_auto", "age",
+    "segmentation_affinitaire",
+    "seg_dig_auto",
     "TOP_TERRITORIAL_ENGAGE", "TOP_OPTIMISATEUR_MULTIBANCARISE",
     "TOP_JOUEUR_INVESTISSEUR", "TOP_PRUDENT_INSTALLE",
     "TOP_PROFESSIONNEL_INDEPENDANT",
-    "conseiller", "segmentation_principalisation",
+    "conseiller", "age","segmentation_principalisation",
 ]
 
 # Types réduits pour les colonnes numériques : un flag 0/1 n'a pas besoin
