@@ -247,11 +247,11 @@ USED_COLUMNS = [
 # Types réduits pour les colonnes numériques : un flag 0/1 n'a pas besoin
 # d'un Int64 (8 octets), Int8 (1 octet) suffit largement. seg_dig_auto est
 # aussi un flag 0/1 entier -> Int8.
-# "age" n'est volontairement PAS forcée en Int16 ici : si une seule valeur
-# du fichier n'est pas un entier pur (ex: "35.0", "35,0", espace, vide),
-# le cast pendant la lecture CSV (avec ignore_errors) peut annuler TOUTE
-# la colonne au lieu de juste la ligne fautive. Elle est donc lue en texte
-# puis nettoyée/convertie proprement juste après le chargement.
+# Ces casts sont appliqués APRÈS la lecture complète du CSV (voir
+# _read_csv_optimized), avec strict=False : une valeur mal formée dans une
+# colonne devient simplement null pour cette ligne-là, sans jamais annuler
+# toute la colonne. "age" n'est pas ici : elle est nettoyée séparément
+# juste après le chargement (gère les décimales/virgules/espaces).
 DTYPE_OVERRIDES = {
     "client_id": pl.Int32,
     "seg_dig_auto": pl.Int8,
@@ -263,34 +263,43 @@ DTYPE_OVERRIDES = {
 }
 
 def _read_csv_optimized(source):
-    """Lit un CSV (bytes ou flux) en ne gardant que les colonnes utiles,
-    avec des dtypes réduits, pour limiter le pic mémoire."""
-    # Étape 1 : lire uniquement l'en-tête pour savoir quelles colonnes existent
-    peek = pl.read_csv(source, separator=";", n_rows=0, ignore_errors=True)
-    # IMPORTANT : on parcourt peek.columns (l'ordre RÉEL du fichier), pas
-    # USED_COLUMNS. Passer à Polars une liste de colonnes dans un ordre
-    # différent de celui du CSV source peut désaligner la lecture (des
-    # valeurs associées au mauvais nom de colonne). USED_COLUMNS sert
-    # uniquement de filtre "quelles colonnes garder", jamais d'ordre.
-    cols_to_use = [c for c in peek.columns if c in USED_COLUMNS] or None
+    """Lit un CSV (bytes ou flux) intégralement, puis réduit aux colonnes
+    utiles et applique des dtypes compacts APRÈS la lecture.
 
-    if hasattr(source, "seek"):
-        source.seek(0)  # remettre le curseur après le peek
-
-    schema_overrides = {
-        k: v for k, v in DTYPE_OVERRIDES.items()
-        if cols_to_use is None or k in cols_to_use
-    }
-
-    return pl.read_csv(
+    Choix volontaire : passer `columns=` et `schema_overrides=` directement
+    à pl.read_csv (comme avant) s'est révélé peu fiable sur de gros fichiers
+    (colonnes silencieusement perdues). Lire d'abord tout le fichier avec
+    Polars garantit que chaque nom de colonne du header est respecté, puis
+    on réduit et on caste ensuite avec `strict=False` (une valeur mal
+    formée devient simplement null, sans jamais faire disparaître toute
+    une colonne ou toute une ligne).
+    """
+    df_full = pl.read_csv(
         source,
         separator=";",
         ignore_errors=True,
         low_memory=False,
         rechunk=True,
-        columns=cols_to_use,
-        schema_overrides=schema_overrides,
     )
+
+    # Réduction aux colonnes utiles, dans l'ordre où elles apparaissent
+    # réellement dans le fichier.
+    cols_to_use = [c for c in df_full.columns if c in USED_COLUMNS]
+    if cols_to_use:
+        df_full = df_full.select(cols_to_use)
+
+    # Cast compact APRÈS coup, colonne par colonne, en tolérant les valeurs
+    # mal formées (strict=False -> null ponctuel, jamais de colonne entière
+    # perdue).
+    cast_exprs = [
+        pl.col(col_name).cast(dtype, strict=False).alias(col_name)
+        for col_name, dtype in DTYPE_OVERRIDES.items()
+        if col_name in df_full.columns
+    ]
+    if cast_exprs:
+        df_full = df_full.with_columns(cast_exprs)
+
+    return df_full
 
 @st.cache_resource
 def load_csv_stream(file_bytes):
